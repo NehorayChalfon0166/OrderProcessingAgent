@@ -1,0 +1,402 @@
+{
+  "restaurant_name": "Mario's Pizzeria",
+  "currency": "USD",
+  "categories": [
+    {
+      "name": "Pizzas",
+      "items": [
+        {
+          "id": "pizza_margherita",
+          "name": "Margherita",
+          "description": "Classic tomato sauce, fresh mozzarella, and fragrant basil on a hand-tossed crust",
+          "sizes": {
+            "small": 9.99,
+            "medium": 12.99,
+            "large": 15.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "extra_cheese", "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "bacon", "sausage", "anchovies", "pineapple", "spinach"
+          ]
+        },
+        {
+          "id": "pizza_pepperoni",
+          "name": "Pepperoni",
+          "description": "Generous layers of premium pepperoni over melted mozzarella and our signature tomato sauce",
+          "sizes": {
+            "small": 10.99,
+            "medium": 13.99,
+            "large": 16.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "extra_cheese", "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "bacon", "sausage", "anchovies", "pineapple", "spinach"
+          ]
+        },
+        {
+          "id": "pizza_bbq_chicken",
+          "name": "BBQ Chicken",
+          "description": "Grilled chicken, smoky BBQ sauce, red onions, and cilantro with mozzarella and gouda",
+          "sizes": {
+            "small": 11.99,
+            "medium": 14.99,
+            "large": 17.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "extra_cheese", "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "bacon", "pineapple", "spinach"
+          ]
+        },
+        {
+          "id": "pizza_veggie",
+          "name": "Veggie Supreme",
+          "description": "A garden-fresh medley of mushrooms, bell peppers, onions, olives, tomatoes, and spinach",
+          "sizes": {
+            "small": 10.99,
+            "medium": 13.99,
+            "large": 16.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "extra_cheese", "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "pineapple", "spinach", "anchovies"
+          ]
+        },
+        {
+          "id": "pizza_hawaiian",
+          "name": "Hawaiian",
+          "description": "Sweet pineapple chunks and savory ham over mozzarella with our classic tomato sauce",
+          "sizes": {
+            "small": 10.99,
+            "medium": 13.99,
+            "large": 16.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "extra_cheese", "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "bacon", "sausage", "spinach"
+          ]
+        },
+        {
+          "id": "pizza_meat_lovers",
+          "name": "Meat Lovers",
+          "description": "Loaded with pepperoni, Italian sausage, crispy bacon, ham, and seasoned ground beef",
+          "sizes": {
+            "small": 12.99,
+            "medium": 15.99,
+            "large": 18.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "extra_cheese", "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "pineapple", "spinach"
+          ]
+        },
+        {
+          "id": "pizza_four_cheese",
+          "name": "Four Cheese",
+          "description": "A rich blend of mozzarella, parmesan, gorgonzola, and ricotta on a garlic-infused base",
+          "sizes": {
+            "small": 11.99,
+            "medium": 14.99,
+            "large": 17.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "bacon", "sausage", "anchovies", "pineapple", "spinach"
+          ]
+        },
+        {
+          "id": "pizza_buffalo",
+          "name": "Buffalo Chicken",
+          "description": "Spicy buffalo chicken, blue cheese crumbles, celery, and a drizzle of ranch dressing",
+          "sizes": {
+            "small": 11.99,
+            "medium": 14.99,
+            "large": 17.99
+          },
+          "default_size": "medium",
+          "available_toppings": [
+            "extra_cheese", "mushrooms", "olives", "peppers", "onions",
+            "jalapenos", "bacon", "spinach"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Sides",
+      "items": [
+        {
+          "id": "side_garlic_bread",
+          "name": "Garlic Bread",
+          "description": "Freshly baked Italian bread brushed with garlic butter and herbs",
+          "price": 4.99
+        },
+        {
+          "id": "side_cheesy_garlic_bread",
+          "name": "Cheesy Garlic Bread",
+          "description": "Our classic garlic bread topped with melted mozzarella and parmesan",
+          "price": 6.49
+        },
+        {
+          "id": "side_mozzarella_sticks",
+          "name": "Mozzarella Sticks",
+          "description": "Six golden-fried mozzarella sticks served with marinara dipping sauce",
+          "price": 6.99
+        },
+        {
+          "id": "side_caesar_salad",
+          "name": "Caesar Salad",
+          "description": "Crisp romaine lettuce, shaved parmesan, croutons, and creamy Caesar dressing",
+          "price": 7.49
+        },
+        {
+          "id": "side_wings",
+          "name": "Chicken Wings",
+          "description": "Eight crispy chicken wings tossed in your choice of Buffalo, BBQ, or Garlic Parmesan sauce",
+          "price": 9.99
+        },
+        {
+          "id": "side_fries",
+          "name": "Seasoned Fries",
+          "description": "Crispy golden fries seasoned with our signature Italian herb blend",
+          "price": 4.49
+        },
+        {
+          "id": "side_onion_rings",
+          "name": "Onion Rings",
+          "description": "Thick-cut onion rings in a crispy beer batter, served with ranch dipping sauce",
+          "price": 5.99
+        }
+      ]
+    },
+    {
+      "name": "Drinks",
+      "items": [
+        {
+          "id": "drink_coca_cola",
+          "name": "Coca Cola",
+          "description": "Classic Coca-Cola, ice cold",
+          "sizes": {
+            "regular": 1.99,
+            "large": 2.99
+          },
+          "default_size": "regular"
+        },
+        {
+          "id": "drink_sprite",
+          "name": "Sprite",
+          "description": "Refreshing lemon-lime Sprite",
+          "sizes": {
+            "regular": 1.99,
+            "large": 2.99
+          },
+          "default_size": "regular"
+        },
+        {
+          "id": "drink_water",
+          "name": "Bottled Water",
+          "description": "Pure spring water, 500ml bottle",
+          "price": 1.49
+        },
+        {
+          "id": "drink_iced_tea",
+          "name": "Iced Tea",
+          "description": "Freshly brewed sweet or unsweetened iced tea",
+          "sizes": {
+            "regular": 2.29,
+            "large": 3.29
+          },
+          "default_size": "regular"
+        },
+        {
+          "id": "drink_lemonade",
+          "name": "Lemonade",
+          "description": "House-made lemonade with real lemon juice",
+          "sizes": {
+            "regular": 2.49,
+            "large": 3.49
+          },
+          "default_size": "regular"
+        },
+        {
+          "id": "drink_diet_coke",
+          "name": "Diet Coke",
+          "description": "Sugar-free Diet Coke, ice cold",
+          "sizes": {
+            "regular": 1.99,
+            "large": 2.99
+          },
+          "default_size": "regular"
+        }
+      ]
+    },
+    {
+      "name": "Desserts",
+      "items": [
+        {
+          "id": "dessert_tiramisu",
+          "name": "Tiramisu",
+          "description": "Authentic Italian tiramisu with espresso-soaked ladyfingers, mascarpone cream, and cocoa dusting",
+          "price": 6.99
+        },
+        {
+          "id": "dessert_chocolate_lava_cake",
+          "name": "Chocolate Lava Cake",
+          "description": "Warm chocolate cake with a molten center, served with vanilla ice cream",
+          "price": 7.49
+        },
+        {
+          "id": "dessert_cheesecake",
+          "name": "New York Cheesecake",
+          "description": "Creamy New York-style cheesecake with a graham cracker crust and berry compote",
+          "price": 6.49
+        },
+        {
+          "id": "dessert_cannoli",
+          "name": "Cannoli",
+          "description": "Two crispy shells filled with sweet ricotta cream and mini chocolate chips",
+          "price": 5.99
+        }
+      ]
+    }
+  ],
+  "toppings": [
+    {
+      "id": "extra_cheese",
+      "name": "Extra Cheese",
+      "price": 1.50
+    },
+    {
+      "id": "mushrooms",
+      "name": "Mushrooms",
+      "price": 1.00
+    },
+    {
+      "id": "olives",
+      "name": "Olives",
+      "price": 1.00
+    },
+    {
+      "id": "peppers",
+      "name": "Bell Peppers",
+      "price": 1.00
+    },
+    {
+      "id": "onions",
+      "name": "Onions",
+      "price": 0.75
+    },
+    {
+      "id": "jalapenos",
+      "name": "Jalapeños",
+      "price": 1.00
+    },
+    {
+      "id": "bacon",
+      "name": "Bacon",
+      "price": 1.75
+    },
+    {
+      "id": "sausage",
+      "name": "Italian Sausage",
+      "price": 1.50
+    },
+    {
+      "id": "anchovies",
+      "name": "Anchovies",
+      "price": 1.50
+    },
+    {
+      "id": "pineapple",
+      "name": "Pineapple",
+      "price": 1.00
+    },
+    {
+      "id": "spinach",
+      "name": "Spinach",
+      "price": 1.00
+    },
+    {
+      "id": "sun_dried_tomatoes",
+      "name": "Sun-Dried Tomatoes",
+      "price": 1.25
+    },
+    {
+      "id": "artichoke_hearts",
+      "name": "Artichoke Hearts",
+      "price": 1.50
+    },
+    {
+      "id": "roasted_garlic",
+      "name": "Roasted Garlic",
+      "price": 0.75
+    }
+  ],
+  "deals": [
+    {
+      "id": "deal_family",
+      "name": "Family Deal",
+      "description": "2 Large Pizzas + 1 Side + 2 Large Drinks — feeds the whole family!",
+      "price": 34.99,
+      "includes": {
+        "pizzas": {
+          "quantity": 2,
+          "size": "large"
+        },
+        "sides": {
+          "quantity": 1
+        },
+        "drinks": {
+          "quantity": 2,
+          "size": "large"
+        }
+      }
+    },
+    {
+      "id": "deal_couple",
+      "name": "Couple's Special",
+      "description": "1 Medium Pizza + 1 Side + 2 Regular Drinks — perfect date night in",
+      "price": 21.99,
+      "includes": {
+        "pizzas": {
+          "quantity": 1,
+          "size": "medium"
+        },
+        "sides": {
+          "quantity": 1
+        },
+        "drinks": {
+          "quantity": 2,
+          "size": "regular"
+        }
+      }
+    },
+    {
+      "id": "deal_party",
+      "name": "Party Pack",
+      "description": "4 Large Pizzas + 2 Sides + 4 Large Drinks — great for gatherings!",
+      "price": 64.99,
+      "includes": {
+        "pizzas": {
+          "quantity": 4,
+          "size": "large"
+        },
+        "sides": {
+          "quantity": 2
+        },
+        "drinks": {
+          "quantity": 4,
+          "size": "large"
+        }
+      }
+    }
+  ],
+  "delivery_fee": 3.99,
+  "min_order_amount": 10.00,
+  "estimated_delivery_time": "30-45 min"
+}
