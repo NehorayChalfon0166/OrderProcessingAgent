@@ -1,25 +1,44 @@
 # Component: `agent_loop.py`
 
-Status: **SETTLED — two-call loop**
+Status: **SETTLED — loop pattern**
 
 The orchestration layer. Ties together session, catalogue, pricing, tools, prompts,
 and the LLM client. This is the only file that understands the full control flow.
 
-## Design: Two-Call Loop
+## Design: Loop Pattern
 
-A single `process_turn()` makes up to two LLM calls:
+A single `process_turn()` loops: LLM with tools → execute → repeat until the
+LLM responds without tool calls (or max iterations reached).
 
-1. **Call 1 (tool execution):** LLM sees the user message + tool definitions.
-   It returns tool calls. Text is ignored — tools execute silently.
-2. Tools execute sequentially, results appended to conversation.
-3. **Call 2 (response):** LLM sees user message + tool calls + tool results,
-   but **without tool definitions** (`tools=None`). It responds naturally.
+```
+while not done:
+    LLM with tools → text + tool_calls
+    if no tool_calls:
+        return text          ← model is responding to the customer
+    execute tools, append results, apply transitions
+    loop                    ← model sees results, may call more tools or respond
+```
 
-If Call 1 returns no tool calls, Call 2 is skipped — the text from Call 1
-is returned directly.
+Tools are always available. The model decides each iteration whether to call
+them or respond. It naturally converges when it has everything it needs.
 
-This guarantees every user turn ends with a complete, tool-result-aware
-response. No empty messages, no "Adding..." without "Added!"
+If the model returns no tool calls and no tools were executed, this is a
+single-call turn (e.g., "Hi" → "Welcome!"). If tools execute, the model
+sees their results in the next iteration and responds with full context.
+
+This guarantees every turn ends with a complete, tool-result-aware response.
+No empty messages, no "Adding..." without "Added!".
+
+## Why not two-call?
+
+The previous two-call pattern (Call 1 with tools, Call 2 without) created a
+problem: on Call 2 the model saw tool interactions in context and wanted to
+continue the pattern, but `tools=None` blocked the legitimate channel. DeepSeek
+models sometimes routed through text instead, outputting raw `<invoke>` tags.
+
+In the loop pattern, tools are always available — the model uses the structured
+`tool_calls` channel when it wants to invoke something. There's no forbidden
+path to hack around. The model converges naturally.
 
 ## `process_turn()`
 
@@ -41,60 +60,48 @@ Called once per user message. Returns the text to display to the user.
 1. Append user message
    session.add_user_message(user_message)
 
-2. Build Call 1 prompt + tool definitions
-   prompt = build_tool_prompt(session, ...)
-   tool_funcs = TOOLS_BY_STATE[session.state]
-   tool_defs = build_tool_definitions(tool_funcs)
+2. Loop (max MAX_ITERATIONS = 5):
+   a. Refresh tool definitions (state may have changed)
+      tool_funcs = TOOLS_BY_STATE[session.state]
+      tool_defs = build_tool_definitions(tool_funcs)
 
-3. CALL 1 — LLM with tools
-   full_msgs = [{"role": "system", "content": prompt}] + messages
-   _text_1, tool_calls = llm_client.chat(full_msgs, tool_defs)
+   b. Build prompt + messages
+      prompt = build_system_prompt(session, ...)
+      full_msgs = [{"role": "system", "content": prompt}] + messages
 
-4. If tool_calls:
-   a. Record assistant message (tool_calls only, no text)
-      session.add_assistant_message(content=None, tool_calls=tool_calls)
+   c. LLM call
+      text, tool_calls = llm_client.chat(full_msgs, tool_defs)
 
-   b. Execute tool calls sequentially (max 5)
-      for tc in tool_calls[:5]:
-          result = dispatch_and_execute(tc)
-          session.add_tool_result(tc.id, tc.name, result.model_dump_json())
+   d. If no tool_calls:
+      Record assistant message (text)
+      Save session
+      Return text                    ← DONE
 
-   c. Apply state transitions
-      _apply_transition(session)
+   e. Tool calls present:
+      Record assistant message (tool_calls, no text)
+      Execute tools sequentially (max 5 per iteration)
+      Apply state transitions
+      Continue loop                  ← model sees results, decides next step
 
-   d. CALL 2 — LLM WITHOUT tools
-      prompt_2 = build_response_prompt(session, ...)
-      full_msgs_2 = [{"role": "system", "content": prompt_2}] + messages
-      text_2, _ = llm_client.chat(full_msgs_2, tools=None)
-
-   e. Record assistant response (text)
-      session.add_assistant_message(content=text_2)
-
-5. If no tool_calls:
-   Record assistant message (text from Call 1)
-
-6. Save session
-   session.save()
-
-7. Return text (text_2 if tools called, _text_1 if not)
+3. Fallback (max iterations exhausted):
+   Log warning, return generic message
 ```
 
 ## Prompts
 
-Two variants built by `prompts.py`:
+Single unified prompt built by `prompts.py`:
 
-- **`build_tool_prompt` (Call 1):** "If tools are needed, call them — no text.
-  If no tools needed, respond briefly." Menu hints: "Reference when asked, do not list."
+- **`build_system_prompt`:** "Use tools when action is needed. When you call
+  tools, you don't need text — you'll see results and respond after. When
+  ready to respond, keep it brief (1-3 sentences)."
 
-- **`build_response_prompt` (Call 2):** "You CANNOT call tools. Only respond with text.
-  Do not write tool-call syntax or XML. Keep responses short — 1 to 3 sentences.
-  Only say confirmed when state IS 'completed'."
-
-The `tools=None` in Call 2 is an API-level enforcement, not just a prompt request.
+No separate "you have tools" vs "you don't have tools" mode. No mention of
+`<invoke>` or tool-call syntax in the prompt — the model doesn't need to be
+told not to do something it has no reason to do.
 
 ## State Transitions: `_apply_transition()`
 
-Evaluates `session._pending_transition` after all tool calls complete.
+Evaluates `session._pending_transition` after each iteration's tool calls.
 
 | Transition | Set by | Preconditions |
 |---|---|---|
@@ -117,10 +124,11 @@ availability. Both the prompt builder and `_lookup_tool` read from it.
 | Wrong-state tool call | Not in TOOLS_BY_STATE → not in LLM's tool list → can't be called |
 | Unknown tool name | `_lookup_tool` returns None → error result fed back to LLM |
 | Tool exception | try/except around each tool call → error result, loop continues |
-| Too many tool calls | Slice `tool_calls[:5]` — only first 5 processed |
+| Too many tool calls | Slice `tool_calls[:5]` — only first 5 processed per iteration |
 | Invalid transition | `_apply_transition` prevalidation blocks it |
-| Empty response | Two-call loop guarantees Call 2 produces text |
-| Tool hallucination | `tools=None` in Call 2 prevents tool calls at API level |
+| Empty response | Loop doesn't exit until text is produced; fallback if all else fails |
+| Infinite loop | `MAX_ITERATIONS = 5` hard cap with fallback message |
+| Tool hallucination | Tools always available — model uses real tool_calls channel, no need to hack via text |
 
 ## Payment Simulation
 

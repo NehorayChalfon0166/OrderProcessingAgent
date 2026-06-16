@@ -137,9 +137,11 @@ class TestLookupTool:
 
 
 class MockLLMClient:
-    """Fake LLM client with multi-call support for the two-call loop.
+    """Fake LLM client with multi-call support for the loop-based agent.
 
     Accepts a list of (text, tool_calls) tuples — one per expected chat() call.
+    The loop consumes responses until it gets one without tool_calls, or until
+    the response list is exhausted (returns empty string, no tools).
     """
 
     def __init__(self, responses=None):
@@ -240,7 +242,7 @@ class TestProcessTurn:
         assert len(session.conversation) == 4
 
     def test_tool_error_is_handled(self, catalogue, pricing):
-        """Tool raises — error caught, Call 2 responds."""
+        """Tool raises — error caught, loop continues to next iteration."""
         session = OrderSession()
         from models import ToolCallRequest
         mock_client = MockLLMClient(responses=[
@@ -254,3 +256,79 @@ class TestProcessTurn:
         tool_msgs = [m for m in session.conversation if m.role == MessageRole.TOOL]
         assert len(tool_msgs) == 1
         assert "error" in tool_msgs[0].content.lower()
+
+    def test_chained_tool_calls(self, catalogue, pricing):
+        """Model chains tools across iterations — e.g. browse → add → respond."""
+        session = OrderSession()
+        from models import ToolCallRequest
+        mock_client = MockLLMClient(responses=[
+            # Iteration 1: browse the menu first
+            ("", [ToolCallRequest(id="c1", name="browse_menu",
+                                  arguments={"category": "Pizzas"})]),
+            # Iteration 2: now add an item based on what was seen
+            ("", [ToolCallRequest(id="c2", name="add_to_cart",
+                                  arguments={"product_name": "Margherita", "quantity": 1})]),
+            # Iteration 3: done — respond
+            ("Added medium Margherita — $12.99. Anything else?", []),
+        ])
+
+        text = process_turn(
+            session, "I want a pizza but what do you have? Margherita please",
+            catalogue, pricing, mock_client,
+        )
+
+        assert "Added" in text
+        assert len(session.cart) == 1
+        # user + asst(tools) + tool + asst(tools) + tool + asst(text) = 6
+        assert len(session.conversation) == 6
+
+    def test_empty_text_without_tools_returns_fallback(self, catalogue, pricing):
+        """Model returns empty text and no tools — fallback message used."""
+        session = OrderSession()
+        mock_client = MockLLMClient(responses=[
+            ("", []),  # empty text, no tools — degenerate
+        ])
+
+        text = process_turn(session, "Hi", catalogue, pricing, mock_client)
+        assert len(text) > 0
+        assert "I've processed" in text
+
+    def test_max_iterations_fallback(self, catalogue, pricing):
+        """Model keeps calling tools forever — hits max, returns fallback."""
+        session = OrderSession()
+        from models import ToolCallRequest
+        # Every response has tool calls — model never converges
+        responses = [
+            ("", [ToolCallRequest(id=f"c{i}", name="view_cart", arguments={})])
+            for i in range(10)  # way more than MAX_ITERATIONS=5
+        ]
+        mock_client = MockLLMClient(responses=responses)
+
+        text = process_turn(
+            session, "something that loops", catalogue, pricing, mock_client
+        )
+
+        assert "I've processed" in text
+        # Stopped at MAX_ITERATIONS (5), not all 10 responses consumed
+        # user + 5*(asst+tool) + asst(fallback) = 1 + 10 + 1 = 12
+        assert len(session.conversation) == 12
+
+    def test_state_change_mid_loop(self, catalogue, pricing):
+        """State changes during loop — next iteration gets new tool set."""
+        session = OrderSession()
+        # Place session in REVIEW state where confirm_order is available
+        session.state = OrderState.REVIEW
+        from models import ToolCallRequest
+        mock_client = MockLLMClient(responses=[
+            # Iteration 1: confirm the order
+            ("", [ToolCallRequest(id="c1", name="confirm_order", arguments={})]),
+            # Iteration 2: COMPLETED state — no tools available, must respond
+            ("Your order is confirmed! Total: $0.00.", []),
+        ])
+
+        text = process_turn(
+            session, "confirm my order", catalogue, pricing, mock_client
+        )
+
+        assert session.state == OrderState.COMPLETED
+        assert "confirmed" in text.lower()

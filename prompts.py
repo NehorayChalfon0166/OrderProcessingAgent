@@ -1,8 +1,8 @@
 """System prompt builder for the order processing agent.
 
-Produces two variants for the two-call loop:
-  - build_tool_prompt: Call 1 — LLM has tools, should use them silently
-  - build_response_prompt: Call 2 — LLM has NO tools, responds naturally
+Single unified prompt for the loop-based agent. Tools are always available
+— the LLM decides in each iteration whether to call tools or respond to the
+customer. It naturally converges when it has everything it needs.
 
 The LLM discovers the menu through tool results — no menu dump in the prompt.
 """
@@ -13,23 +13,28 @@ from models import CustomerInfo
 from session import OrderSession
 
 
-def build_tool_prompt(
+def build_system_prompt(
     session: OrderSession,
     restaurant_name: str,
     hints: str,
 ) -> str:
-    """Prompt for Call 1 — LLM has tools available, should use them silently.
+    """Unified system prompt — LLM always has tools available.
 
-    The LLM should call tools without including text. The response to the
-    customer will happen in Call 2 after tool results are available.
+    The loop lets the model call tools until it's ready to respond.
+    No separate "you have tools" vs "you don't have tools" modes.
     """
     return (
         f"You are a friendly, brief order-taking assistant for {restaurant_name}.\n"
         f"Current state: {session.state.value}\n"
         f"\n"
-        f"If the customer's request requires tool calls, call them — do not\n"
-        f"include text, you will respond after seeing the results.\n"
-        f"If no tools are needed, respond briefly (1-2 sentences).\n"
+        f"Use tools when you need to take action — add items, browse the menu,\n"
+        f"check the cart, set customer info, confirm orders, etc.\n"
+        f"When you call tools, you don't need to include text — you will see\n"
+        f"the results and can respond after.\n"
+        f"When you are ready to respond to the customer, keep it brief —\n"
+        f"1 to 3 sentences.\n"
+        f"Only say an order is confirmed when the state IS \"completed\".\n"
+        f"Let the system validate products. Do not guess the menu.\n"
         f"\n"
         f"Cart:\n{_format_cart(session)}\n"
         f"\n"
@@ -39,42 +44,11 @@ def build_tool_prompt(
     )
 
 
-def build_response_prompt(
-    session: OrderSession,
-    restaurant_name: str,
-    hints: str,
-) -> str:
-    """Prompt for Call 2 — LLM has NO tools, responds naturally to results.
-
-    The conversation already contains the tool calls and their results.
-    The LLM's job is to tell the customer what happened, concisely.
-    Tools are NOT sent — this is enforced at the API level, not just
-    requested in the prompt.
-    """
-    return (
-        f"You are a friendly, brief order-taking assistant for {restaurant_name}.\n"
-        f"Current state: {session.state.value}\n"
-        f"\n"
-        f"You cannot call any tools. Only respond with text.\n"
-        f"Do not write tool-call syntax or XML in your response.\n"
-        f"\n"
-        f"Respond naturally to the customer based on the results above.\n"
-        f"- Keep responses short — 1 to 3 sentences.\n"
-        f"- Only say an order is confirmed when the state IS \"completed\".\n"
-        f"  Never make up a confirmation before confirm_order succeeds.\n"
-        f"- Let the system validate products. Do not guess the menu.\n"
-        f"\n"
-        f"Cart:\n{_format_cart(session)}\n"
-        f"\n"
-        f"Customer:\n{_format_customer(session.customer)}\n"
-        f"\n"
-        f"Menu (reference when asked, do not list):\n{hints}"
-    )
-
-
-# Backward-compatible alias — used by the no-tool-calls path in process_turn
-# (Call 1 returns text directly when no tools are needed)
-build_system_prompt = build_response_prompt
+# Backward-compatible aliases — kept so existing imports don't break.
+# Both point to the unified prompt since the loop pattern uses one prompt
+# for all iterations.
+build_tool_prompt = build_system_prompt
+build_response_prompt = build_system_prompt
 
 
 def _format_cart(session: OrderSession) -> str:
