@@ -126,7 +126,7 @@ Available in: REVIEW
 Parameters:   none
 
 Generates a fake payment ID (UUID). Records order total.
-session._pending_transition = OrderState.PAYMENT_PENDING
+session._pending_transition = OrderState.COMPLETED
 
 Return type: ConfirmOrderResult
 ```

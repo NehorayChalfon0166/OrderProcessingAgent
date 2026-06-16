@@ -2,6 +2,10 @@
 
 Ties together session, catalogue, pricing, tools, prompts, and the LLM client.
 This is the only file that understands the full control flow.
+
+Uses a two-call pattern:
+  Call 1: LLM with tools → tool calls executed silently
+  Call 2: LLM without tools → natural response informed by tool results
 """
 
 from __future__ import annotations
@@ -10,9 +14,9 @@ import logging
 
 from catalogue import Catalogue
 from llm_client import LLMClient, build_tool_definitions, messages_to_openai
-from models import Message, MessageRole, OrderState, OrderType, ToolCallRequest
+from models import OrderState, OrderType, ToolCallRequest
 from pricing import PricingEngine
-from prompts import build_system_prompt
+from prompts import build_response_prompt, build_tool_prompt
 from session import OrderSession
 from tools import TOOLS_BY_STATE
 
@@ -28,6 +32,8 @@ def process_turn(
 ) -> str:
     """Process one user message through the agent loop.
 
+    May make two LLM calls: one to execute tools, one to respond.
+
     Args:
         session: Current order session (mutated in place).
         user_message: The user's latest input.
@@ -42,8 +48,8 @@ def process_turn(
     session.add_user_message(user_message)
     logger.debug("Processing: %s", user_message[:200])
 
-    # 2. Build prompt + tool definitions
-    prompt = build_system_prompt(
+    # 2. Build Call 1 prompt (tool-only) + tool definitions
+    prompt = build_tool_prompt(
         session,
         restaurant_name=catalogue.restaurant_name,
         hints=catalogue.get_hints(),
@@ -51,27 +57,47 @@ def process_turn(
     tool_funcs = TOOLS_BY_STATE.get(session.state, [])
     tool_defs = build_tool_definitions(tool_funcs) if tool_funcs else None
 
-    # 3. Call LLM
+    # 3. CALL 1 — LLM with tools
     messages = messages_to_openai(session.conversation)
     full_msgs = [{"role": "system", "content": prompt}] + messages
-    text, tool_calls = llm_client.chat(full_msgs, tool_defs)
+    _text_1, tool_calls = llm_client.chat(full_msgs, tool_defs)
 
-    # 4. Record assistant response
-    session.add_assistant_message(content=text, tool_calls=tool_calls)
+    if not tool_calls:
+        # No tools called — record and return the text directly
+        session.add_assistant_message(content=_text_1)
+        session.save()
+        return _text_1
 
-    # 5. Execute tool calls sequentially
-    if tool_calls:
-        for tc in tool_calls[:5]:  # safety limit
-            _execute_tool(session, catalogue, pricing, tc, tool_funcs)
+    # 4. Tool calls present — execute them silently, then respond
 
-    # 6. Evaluate and apply state transition
+    # 4a. Record assistant message (tool calls, no text — user won't see this)
+    session.add_assistant_message(content=None, tool_calls=tool_calls)
+
+    # 4b. Execute tool calls sequentially (max 5)
+    for tc in tool_calls[:5]:
+        _execute_tool(session, catalogue, pricing, tc, tool_funcs)
+
+    # 4c. Apply state transitions (cart/state may have changed)
     _apply_transition(session)
 
-    # 7. Save session
+    # 4d. CALL 2 — LLM WITHOUT tools, sees tool results, responds naturally
+    prompt_2 = build_response_prompt(
+        session,
+        restaurant_name=catalogue.restaurant_name,
+        hints=catalogue.get_hints(),
+    )
+    messages_2 = messages_to_openai(session.conversation)
+    full_msgs_2 = [{"role": "system", "content": prompt_2}] + messages_2
+    text_2, _ = llm_client.chat(full_msgs_2, tools=None)
+
+    # 4e. Record the final text response
+    session.add_assistant_message(content=text_2)
+
+    # 5. Save session
     session.save()
 
-    # 8. Return assistant text
-    return text
+    # 6. Return the natural-language response
+    return text_2
 
 
 # =============================================================================
@@ -161,11 +187,18 @@ def _apply_transition(session: OrderSession) -> None:
         logger.info("State transition: BUILDING → REVIEW")
         return
 
-    # PAYMENT_PENDING transition
+    # PAYMENT_PENDING transition (reserved for future payment processing)
     if target == OrderState.PAYMENT_PENDING:
         session.state = OrderState.PAYMENT_PENDING
         session._pending_transition = None
         logger.info("State transition: → PAYMENT_PENDING")
+        return
+
+    # COMPLETED transition
+    if target == OrderState.COMPLETED:
+        session.state = OrderState.COMPLETED
+        session._pending_transition = None
+        logger.info("State transition: → COMPLETED")
         return
 
     # Fallback — clear unknown transitions

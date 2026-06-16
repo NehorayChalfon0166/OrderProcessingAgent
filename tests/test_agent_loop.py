@@ -61,7 +61,7 @@ class TestApplyTransition:
         assert session._pending_transition is None
 
     def test_cancel_even_with_empty_cart(self):
-        session = OrderSession()  # no cart, no customer
+        session = OrderSession()
         session._pending_transition = OrderState.CANCELLED
         _apply_transition(session)
         assert session.state == OrderState.CANCELLED
@@ -70,8 +70,8 @@ class TestApplyTransition:
         session = OrderSession()
         session._pending_transition = OrderState.REVIEW
         _apply_transition(session)
-        assert session.state == OrderState.BUILDING  # unchanged
-        assert session._pending_transition is None  # cleared
+        assert session.state == OrderState.BUILDING
+        assert session._pending_transition is None
 
     def test_review_blocked_no_name(self, session):
         session.customer.name = None
@@ -104,6 +104,12 @@ class TestApplyTransition:
         _apply_transition(session)
         assert session.state == OrderState.PAYMENT_PENDING
 
+    def test_completed(self, session):
+        session.state = OrderState.PAYMENT_PENDING
+        session._pending_transition = OrderState.COMPLETED
+        _apply_transition(session)
+        assert session.state == OrderState.COMPLETED
+
 
 # =============================================================================
 # Tool Lookup
@@ -131,136 +137,120 @@ class TestLookupTool:
 
 
 class MockLLMClient:
-    """Fake LLM client that returns canned responses."""
+    """Fake LLM client with multi-call support for the two-call loop.
 
-    def __init__(self, text="", tool_calls=None):
-        self.text = text
-        self.tool_calls = tool_calls or []
+    Accepts a list of (text, tool_calls) tuples — one per expected chat() call.
+    """
+
+    def __init__(self, responses=None):
+        self._responses = responses or []
+        self._idx = 0
 
     def chat(self, messages, tools=None):
-        return self.text, self.tool_calls
+        if self._idx < len(self._responses):
+            text, tool_calls = self._responses[self._idx]
+            self._idx += 1
+            return text or "", tool_calls or []
+        return "", []
 
 
 class TestProcessTurn:
     def test_greeting_flow(self, catalogue, pricing):
-        """Simulate the greeting: user says Hi, LLM responds with text."""
+        """No tool calls — one LLM call, text returned directly."""
         session = OrderSession()
-        mock_client = MockLLMClient(
-            text="Welcome to Mario's Pizzeria! What can I get for you today?"
-        )
+        mock_client = MockLLMClient(responses=[
+            ("Hey! What can I get for you?", []),
+        ])
 
         text = process_turn(session, "Hi", catalogue, pricing, mock_client)
 
-        assert "Welcome" in text
+        assert "Hey" in text
         assert len(session.conversation) == 2  # user + assistant
-        assert session.conversation[0].role == MessageRole.USER
-        assert session.conversation[1].role == MessageRole.ASSISTANT
 
     def test_add_item_flow(self, catalogue, pricing):
-        """Simulate adding an item via tool call."""
+        """Tool call → Call 1 returns tools, Call 2 returns final text."""
         session = OrderSession()
         from models import ToolCallRequest
-        mock_client = MockLLMClient(
-            text="Adding that for you!",
-            tool_calls=[
-                ToolCallRequest(
-                    id="call_1",
-                    name="add_to_cart",
-                    arguments={"product_name": "Margherita", "quantity": 1},
-                )
-            ],
-        )
+        mock_client = MockLLMClient(responses=[
+            ("", [ToolCallRequest(id="c1", name="add_to_cart",
+                                  arguments={"product_name": "Margherita", "quantity": 1})]),
+            ("Added medium Margherita — $12.99. Anything else?", []),
+        ])
 
         text = process_turn(
             session, "I want a Margherita pizza", catalogue, pricing, mock_client
         )
 
-        assert "Adding" in text
+        assert "Added" in text
         assert len(session.cart) == 1
         assert session.cart[0].product_id == "pizza_margherita"
-        # Verify tool result message appended
-        assert len(session.conversation) == 3  # user + assistant + tool result
+        # Conversation: user + assistant(tool_calls) + tool_result + assistant(text)
+        assert len(session.conversation) == 4
+        assert session.conversation[1].role == MessageRole.ASSISTANT
+        assert session.conversation[1].tool_calls is not None
         assert session.conversation[2].role == MessageRole.TOOL
-        assert session.conversation[2].name == "add_to_cart"
+        assert session.conversation[3].role == MessageRole.ASSISTANT
+        assert "Added" in session.conversation[3].content
 
     def test_add_and_review_flow(self, catalogue, pricing):
-        """Add an item, then request review via two tool calls in one turn."""
+        """Multiple tool calls → Call 1 returns tools, Call 2 responds."""
         session = OrderSession()
         from models import ToolCallRequest
-        mock_client = MockLLMClient(
-            text="Here's your order summary.",
-            tool_calls=[
-                ToolCallRequest(
-                    id="c1",
-                    name="add_to_cart",
-                    arguments={"product_name": "Margherita"},
-                ),
-                ToolCallRequest(
-                    id="c2",
-                    name="set_customer_info",
-                    arguments={"name": "John", "phone": "555-0123"},
-                ),
-                ToolCallRequest(
-                    id="c3",
-                    name="request_review",
-                    arguments={},
-                ),
-            ],
-        )
+        mock_client = MockLLMClient(responses=[
+            (
+                "",
+                [
+                    ToolCallRequest(id="c1", name="add_to_cart",
+                                   arguments={"product_name": "Margherita"}),
+                    ToolCallRequest(id="c2", name="set_customer_info",
+                                   arguments={"name": "John", "phone": "555-0123"}),
+                    ToolCallRequest(id="c3", name="request_review",
+                                   arguments={}),
+                ],
+            ),
+            ("Here's your order summary, John!", []),
+        ])
 
         text = process_turn(
             session,
-            "I want a Margherita pizza, my name is John, phone 555-0123, that's all",
-            catalogue,
-            pricing,
-            mock_client,
+            "I want a Margherita pizza, my name is John, phone 555-0123",
+            catalogue, pricing, mock_client,
         )
 
         assert len(session.cart) == 1
         assert session.customer.name == "John"
         assert session.customer.phone == "555-0123"
         assert session.state == OrderState.REVIEW
+        assert "summary" in text.lower()
 
     def test_unknown_tool_is_handled(self, catalogue, pricing):
-        """LLM calls a tool that doesn't exist — should not crash."""
+        """Unknown tool → error appended, Call 2 responds."""
         session = OrderSession()
         from models import ToolCallRequest
-        mock_client = MockLLMClient(
-            text="Let me try something.",
-            tool_calls=[
-                ToolCallRequest(
-                    id="c1",
-                    name="hack_the_planet",
-                    arguments={},
-                )
-            ],
-        )
+        mock_client = MockLLMClient(responses=[
+            ("", [ToolCallRequest(id="c1", name="hack_the_planet", arguments={})]),
+            ("Sorry, something went wrong.", []),
+        ])
 
         text = process_turn(
             session, "do something weird", catalogue, pricing, mock_client
         )
-        # Should not raise
-        assert len(session.conversation) == 3  # user + assistant + error tool result
         assert "Unknown tool" in session.conversation[2].content
+        # user + assistant(tools) + tool(error) + assistant(text)
+        assert len(session.conversation) == 4
 
     def test_tool_error_is_handled(self, catalogue, pricing):
-        """Missing required argument — tool should raise, loop should catch."""
+        """Tool raises — error caught, Call 2 responds."""
         session = OrderSession()
         from models import ToolCallRequest
-        mock_client = MockLLMClient(
-            text="Let me try...",
-            tool_calls=[
-                ToolCallRequest(
-                    id="c1",
-                    name="add_to_cart",
-                    arguments={},  # missing required 'product_name'
-                )
-            ],
-        )
+        mock_client = MockLLMClient(responses=[
+            ("", [ToolCallRequest(id="c1", name="add_to_cart", arguments={})]),
+            ("I couldn't add that. Please try again.", []),
+        ])
 
         text = process_turn(
             session, "add nothing", catalogue, pricing, mock_client
         )
-        # Should not crash — error result appended
-        assert session.conversation[-1].role == MessageRole.TOOL
-        assert "error" in session.conversation[-1].content.lower()
+        tool_msgs = [m for m in session.conversation if m.role == MessageRole.TOOL]
+        assert len(tool_msgs) == 1
+        assert "error" in tool_msgs[0].content.lower()

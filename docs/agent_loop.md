@@ -1,9 +1,25 @@
 # Component: `agent_loop.py`
 
-Status: **SETTLED**
+Status: **SETTLED — two-call loop**
 
 The orchestration layer. Ties together session, catalogue, pricing, tools, prompts,
 and the LLM client. This is the only file that understands the full control flow.
+
+## Design: Two-Call Loop
+
+A single `process_turn()` makes up to two LLM calls:
+
+1. **Call 1 (tool execution):** LLM sees the user message + tool definitions.
+   It returns tool calls. Text is ignored — tools execute silently.
+2. Tools execute sequentially, results appended to conversation.
+3. **Call 2 (response):** LLM sees user message + tool calls + tool results,
+   but **without tool definitions** (`tools=None`). It responds naturally.
+
+If Call 1 returns no tool calls, Call 2 is skipped — the text from Call 1
+is returned directly.
+
+This guarantees every user turn ends with a complete, tool-result-aware
+response. No empty messages, no "Adding..." without "Added!"
 
 ## `process_turn()`
 
@@ -23,117 +39,91 @@ Called once per user message. Returns the text to display to the user.
 
 ```
 1. Append user message
-   session.conversation.append(Message(role=USER, content=user_message))
+   session.add_user_message(user_message)
 
-2. Build prompt + tool definitions
-   prompt = build_system_prompt(session, catalogue.get_hints())
+2. Build Call 1 prompt + tool definitions
+   prompt = build_tool_prompt(session, ...)
    tool_funcs = TOOLS_BY_STATE[session.state]
-   tool_defs = llm_client.build_tool_definitions(tool_funcs)
+   tool_defs = build_tool_definitions(tool_funcs)
 
-3. Call LLM
-   messages = llm_client.messages_to_openai(session.conversation)
+3. CALL 1 — LLM with tools
    full_msgs = [{"role": "system", "content": prompt}] + messages
-   text, tool_calls = llm_client.chat(full_msgs, tool_defs)
+   _text_1, tool_calls = llm_client.chat(full_msgs, tool_defs)
 
-4. Record assistant response
-   session.conversation.append(
-       Message(role=ASSISTANT, content=text, tool_calls=tool_calls)
-   )
+4. If tool_calls:
+   a. Record assistant message (tool_calls only, no text)
+      session.add_assistant_message(content=None, tool_calls=tool_calls)
 
-5. Execute tool calls sequentially (max 5)
-   for tc in (tool_calls or [])[:5]:
-       tool_fn = lookup(tc.name, tool_funcs)
-       if tool_fn is None:
-           result = error_result("unknown tool")  # defense-in-depth
-       else:
-           try:
-               result = tool_fn(session, catalogue, pricing, **tc.arguments)
-           except Exception as e:
-               result = error_result(str(e))
-       session.conversation.append(
-           Message(role=TOOL, tool_call_id=tc.id, content=result.model_dump_json())
-       )
+   b. Execute tool calls sequentially (max 5)
+      for tc in tool_calls[:5]:
+          result = dispatch_and_execute(tc)
+          session.add_tool_result(tc.id, tc.name, result.model_dump_json())
 
-6. Evaluate and apply state transition
-   apply_transition(session)
+   c. Apply state transitions
+      _apply_transition(session)
 
-7. Save session
+   d. CALL 2 — LLM WITHOUT tools
+      prompt_2 = build_response_prompt(session, ...)
+      full_msgs_2 = [{"role": "system", "content": prompt_2}] + messages
+      text_2, _ = llm_client.chat(full_msgs_2, tools=None)
+
+   e. Record assistant response (text)
+      session.add_assistant_message(content=text_2)
+
+5. If no tool_calls:
+   Record assistant message (text from Call 1)
+
+6. Save session
    session.save()
 
-8. Return assistant text
-   return text
+7. Return text (text_2 if tools called, _text_1 if not)
 ```
 
-## State Transitions: `apply_transition()`
+## Prompts
+
+Two variants built by `prompts.py`:
+
+- **`build_tool_prompt` (Call 1):** "If tools are needed, call them — no text.
+  If no tools needed, respond briefly." Menu hints: "Reference when asked, do not list."
+
+- **`build_response_prompt` (Call 2):** "You CANNOT call tools. Only respond with text.
+  Do not write tool-call syntax or XML. Keep responses short — 1 to 3 sentences.
+  Only say confirmed when state IS 'completed'."
+
+The `tools=None` in Call 2 is an API-level enforcement, not just a prompt request.
+
+## State Transitions: `_apply_transition()`
 
 Evaluates `session._pending_transition` after all tool calls complete.
-If `_pending_transition` is None, no transition occurs.
 
-```python
-TRANSITION_PREVALIDATION: dict[OrderState, list[callable]] = {
-    OrderState.REVIEW: [
-        # Called when request_review sets _pending_transition = REVIEW
-        lambda s: len(s.cart) > 0 or "Cart is empty",
-        lambda s: s.customer.name or "Name is required",
-        lambda s: s.customer.phone or "Phone is required",
-        lambda s: (s.customer.order_type != OrderType.DELIVERY
-                    or s.customer.address
-                    or "Address is required for delivery"),
-    ],
-    OrderState.PAYMENT_PENDING: [
-        # Called when confirm_order sets _pending_transition = PAYMENT_PENDING
-        # No extra preconditions beyond being in REVIEW
-    ],
-}
-```
+| Transition | Set by | Preconditions |
+|---|---|---|
+| CANCELLED | `cancel_order` | None (always wins) |
+| REVIEW | `request_review` | Cart not empty, name + phone present, address if delivery |
+| PAYMENT_PENDING | (future payment tool) | Reserved for real payment processing |
+| COMPLETED | `confirm_order` | None (prototype skips payment hop) |
 
-If any prevalidation function returns a string (error message): `_pending_transition` is
-cleared, the tool result already contains the issues for the LLM. No transition occurs.
-
-If all return `True`: `session.state = session._pending_transition`.
-
-**Cancel always wins:** If `_pending_transition == CANCELLED`, bypass all prevalidation.
-CANCELLED has no preconditions.
+**Fallback:** unknown transitions are silently cleared — safety net only.
 
 ## Tool Dispatch
 
-```python
-def _dispatch_tool(name: str, tool_funcs: list[callable]) -> callable | None:
-    for f in tool_funcs:
-        if f.__tool_name__ == name:
-            return f
-    return None
-```
-
-`TOOLS_BY_STATE` is imported from `tools.py`. It is the single source of truth for
-which tools are available in which state. Both the prompt builder and the dispatcher
-read from it.
+`TOOLS_BY_STATE` from `tools.py` is the single source of truth for tool
+availability. Both the prompt builder and `_lookup_tool` read from it.
 
 ## Safety Nets
 
 | Guard | Mechanism |
 |---|---|
-| Wrong-state tool call | Tool not in TOOLS_BY_STATE → not in LLM's tool list → can't be called |
-| Unknown tool name | `_dispatch_tool` returns None → error result fed back to LLM |
+| Wrong-state tool call | Not in TOOLS_BY_STATE → not in LLM's tool list → can't be called |
+| Unknown tool name | `_lookup_tool` returns None → error result fed back to LLM |
 | Tool exception | try/except around each tool call → error result, loop continues |
 | Too many tool calls | Slice `tool_calls[:5]` — only first 5 processed |
-| Invalid transition | `apply_transition` prevalidation blocks it, clears `_pending_transition` |
+| Invalid transition | `_apply_transition` prevalidation blocks it |
+| Empty response | Two-call loop guarantees Call 2 produces text |
+| Tool hallucination | `tools=None` in Call 2 prevents tool calls at API level |
 
 ## Payment Simulation
 
-`confirm_order` generates a fake payment ID via `uuid.uuid4()`. In PAYMENT_PENDING
-state, `view_cart` remains available. The only exit from PAYMENT_PENDING in the
-prototype is `cancel_order` (back to CANCELLED). COMPLETED is reached when we add
-a payment webhook or manual confirmation — TBD.
-
-## Error Result Format
-
-When the loop catches an unexpected tool error, it feeds back a structured result
-so the LLM can respond:
-
-```json
-{"success": false, "error": "Tool execution failed: division by zero"}
-```
-
-The LLM presents this naturally to the user: "Something went wrong with that request.
-Could you try again?"
+`confirm_order` generates a fake payment ID via `uuid.uuid4()` and transitions
+directly to COMPLETED. PAYMENT_PENDING exists in the enum as a reserved state
+for future real payment processing — the prototype skips it.

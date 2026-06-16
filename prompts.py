@@ -1,46 +1,80 @@
 """System prompt builder for the order processing agent.
 
-Radically simpler than v1 — no JSON schema, no full menu, no per-state
-instruction blocks. Tool availability IS the instruction. The LLM discovers
-the menu through tool results.
+Produces two variants for the two-call loop:
+  - build_tool_prompt: Call 1 — LLM has tools, should use them silently
+  - build_response_prompt: Call 2 — LLM has NO tools, responds naturally
+
+The LLM discovers the menu through tool results — no menu dump in the prompt.
 """
 
 from __future__ import annotations
 
-from models import CustomerInfo, OrderState
+from models import CustomerInfo
 from session import OrderSession
 
 
-def build_system_prompt(
+def build_tool_prompt(
     session: OrderSession,
     restaurant_name: str,
     hints: str,
 ) -> str:
-    """Build the system prompt for the current state.
+    """Prompt for Call 1 — LLM has tools available, should use them silently.
 
-    Args:
-        session: Current order session.
-        restaurant_name: Name from the menu (e.g. "Mario's Pizzeria").
-        hints: Lightweight menu hints from catalogue.get_hints().
-
-    Returns:
-        A system prompt string, typically 200-400 chars.
+    The LLM should call tools without including text. The response to the
+    customer will happen in Call 2 after tool results are available.
     """
-    cart_summary = _format_cart(session)
-    customer_summary = _format_customer(session.customer)
-
     return (
-        f"You are a friendly order-taking assistant for {restaurant_name}.\n"
+        f"You are a friendly, brief order-taking assistant for {restaurant_name}.\n"
         f"Current state: {session.state.value}\n"
-        f"Use the available tools to help the customer. Do not invent menu "
-        f"items — use add_to_cart and let the system validate the product.\n"
         f"\n"
-        f"Cart:\n{cart_summary}\n"
+        f"If the customer's request requires tool calls, call them — do not\n"
+        f"include text, you will respond after seeing the results.\n"
+        f"If no tools are needed, respond briefly (1-2 sentences).\n"
         f"\n"
-        f"Customer:\n{customer_summary}\n"
+        f"Cart:\n{_format_cart(session)}\n"
         f"\n"
-        f"Menu categories: {hints}"
+        f"Customer:\n{_format_customer(session.customer)}\n"
+        f"\n"
+        f"Menu (reference when asked, do not list in greeting):\n{hints}"
     )
+
+
+def build_response_prompt(
+    session: OrderSession,
+    restaurant_name: str,
+    hints: str,
+) -> str:
+    """Prompt for Call 2 — LLM has NO tools, responds naturally to results.
+
+    The conversation already contains the tool calls and their results.
+    The LLM's job is to tell the customer what happened, concisely.
+    Tools are NOT sent — this is enforced at the API level, not just
+    requested in the prompt.
+    """
+    return (
+        f"You are a friendly, brief order-taking assistant for {restaurant_name}.\n"
+        f"Current state: {session.state.value}\n"
+        f"\n"
+        f"You cannot call any tools. Only respond with text.\n"
+        f"Do not write tool-call syntax or XML in your response.\n"
+        f"\n"
+        f"Respond naturally to the customer based on the results above.\n"
+        f"- Keep responses short — 1 to 3 sentences.\n"
+        f"- Only say an order is confirmed when the state IS \"completed\".\n"
+        f"  Never make up a confirmation before confirm_order succeeds.\n"
+        f"- Let the system validate products. Do not guess the menu.\n"
+        f"\n"
+        f"Cart:\n{_format_cart(session)}\n"
+        f"\n"
+        f"Customer:\n{_format_customer(session.customer)}\n"
+        f"\n"
+        f"Menu (reference when asked, do not list):\n{hints}"
+    )
+
+
+# Backward-compatible alias — used by the no-tool-calls path in process_turn
+# (Call 1 returns text directly when no tools are needed)
+build_system_prompt = build_response_prompt
 
 
 def _format_cart(session: OrderSession) -> str:

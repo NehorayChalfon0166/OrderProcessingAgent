@@ -61,4 +61,4 @@ def test_prompt_length_under_500():
     """Prompt should be compact — no menu dump, no JSON schema."""
     session = OrderSession()
     prompt = build_system_prompt(session, "Mario's Pizzeria", "Pizzas: Margherita, Pepperoni, ...")
-    assert len(prompt) < 600  # generous upper bound
+    assert len(prompt) < 800  # behavioral rules add length, still compact

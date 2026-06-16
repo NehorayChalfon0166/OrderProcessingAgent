@@ -343,7 +343,7 @@ class TestConfirmOrder:
         assert result.success is True
         assert result.order_id is not None
         assert result.total > 0
-        assert session._pending_transition == OrderState.PAYMENT_PENDING
+        assert session._pending_transition == OrderState.COMPLETED
 
 
 # =============================================================================
