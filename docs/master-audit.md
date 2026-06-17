@@ -3,6 +3,10 @@
 Audit date: 2026-06-16  
 All core files, CLI simulations, and edge cases tested.
 
+> **2026-06-17 update:** Issues #1 (COMPLETED), #2 (PAYMENT_PENDING dead-end),
+> #3/#5 (empty/stale text) resolved via loop-based agent and payment infrastructure.
+> See `docs/agent_loop.md` and `docs/payment_architecture.md`.
+
 ---
 
 ## Critical

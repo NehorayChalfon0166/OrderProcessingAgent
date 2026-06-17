@@ -107,8 +107,8 @@ Evaluates `session._pending_transition` after each iteration's tool calls.
 |---|---|---|
 | CANCELLED | `cancel_order` | None (always wins) |
 | REVIEW | `request_review` | Cart not empty, name + phone present, address if delivery |
-| PAYMENT_PENDING | (future payment tool) | Reserved for real payment processing |
-| COMPLETED | `confirm_order` | None (prototype skips payment hop) |
+| PAYMENT_PENDING | `confirm_order` (link) | None |
+| COMPLETED | `confirm_order` (cash, default) | None |
 
 **Fallback:** unknown transitions are silently cleared — safety net only.
 
@@ -130,8 +130,11 @@ availability. Both the prompt builder and `_lookup_tool` read from it.
 | Infinite loop | `MAX_ITERATIONS = 5` hard cap with fallback message |
 | Tool hallucination | Tools always available — model uses real tool_calls channel, no need to hack via text |
 
-## Payment Simulation
+## Payment
 
-`confirm_order` generates a fake payment ID via `uuid.uuid4()` and transitions
-directly to COMPLETED. PAYMENT_PENDING exists in the enum as a reserved state
-for future real payment processing — the prototype skips it.
+`confirm_order` takes a `payment_method` parameter:
+- `"cash"` (default) — transitions to COMPLETED
+- `"link"` — transitions to PAYMENT_PENDING, waits for external webhook
+
+Sets `session.payment_method` for the future payment webhook. See
+`docs/payment_architecture.md` for the full design and activation plan.

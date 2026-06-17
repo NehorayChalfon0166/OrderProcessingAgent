@@ -33,6 +33,7 @@ with standard pytest, no mocking needed beyond test fixtures.
 - **Append messages:** UserMessage, AssistantMessage, ToolResult — all append correctly
 - **Save/load:** save session to temp JSON, load back, verify all fields match
 - **`_pending_transition`:** not serialized in model_dump
+- **`payment_method`:** serialized, survives roundtrip
 
 ### `tools.py` (with mock session/catalogue/pricing)
 - **`add_to_cart`:** found product → item in cart, not found → suggestions, deal → expanded items
@@ -41,7 +42,7 @@ with standard pytest, no mocking needed beyond test fixtures.
 - **`view_cart`:** empty cart, cart with items, subtotal correct
 - **`set_customer_info`:** partial fill, override, missing_required calculation
 - **`request_review`:** cart empty → issues, no name → issues, all good → _transition set
-- **`confirm_order`:** sets _transition=PAYMENT_PENDING, generates order_id
+- **`confirm_order`:** cash (default) → COMPLETED, link → PAYMENT_PENDING, sets payment_method
 - **`cancel_order`:** sets _transition=CANCELLED
 
 ### `prompts.py`
@@ -55,7 +56,8 @@ with standard pytest, no mocking needed beyond test fixtures.
 - **`build_tool_definitions()`:** generates valid JSON Schema with name, description, parameters
 
 ### `agent_loop.py` (without LLM — mock LLM responses)
-- **`apply_transition()`:** REVIEW preconditions (empty cart → blocked, no name → blocked, delivery no address → blocked), PAYMENT_PENDING transition, CANCEL always wins
+- **`apply_transition()`:** REVIEW preconditions (empty cart → blocked, no name → blocked, delivery no address → blocked), PAYMENT_PENDING, COMPLETED, CANCEL always wins
+- **`process_turn()`:** greeting (no tools), add item (tool → respond), chained tools (browse → add → respond), max iterations fallback, empty text fallback, state change mid-loop
 
 ### `@tool` decorator
 - Stores __tool_name__, __tool_description__, __tool_schema__
@@ -68,9 +70,9 @@ with standard pytest, no mocking needed beyond test fixtures.
 - Edge case: LLM calls wrong tool for state (should be impossible if tool filtering works)
 - Edge case: LLM hallucinates product name → tool returns suggestions → LLM adapts
 - Edge case: user cancels mid-order
-- Streaming behavior (when added)
+- Payment: cash vs link flow, PAYMENT_PENDING → COMPLETED
 
-These are tested manually via `python main.py` or with recorded LLM responses.
+These are tested manually via `python main.py cli` or with recorded LLM responses.
 
 ## Test File Organization
 
@@ -83,9 +85,11 @@ tests/
   test_tools.py          # uses fixtures, no LLM
   test_prompts.py
   test_llm_client.py     # message conversion + tool defs, no API calls
-  test_agent_loop.py     # transition logic, no LLM
+  test_agent_loop.py     # transition logic + loop pattern, no LLM
+  test_session_router.py # phone-number session lookup
+  test_config.py         # env var loading
   test_decorator.py
-  conftest.py            # shared fixtures: sample catalogue, sample session, sample cart
+  conftest.py            # shared fixtures
 ```
 
 ## Fixtures (in `conftest.py`)

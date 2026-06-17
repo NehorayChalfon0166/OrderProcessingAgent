@@ -3,6 +3,12 @@
 For each issue: root cause analysis and the fix, focusing on the core
 failure reason, not just patching symptoms.
 
+> **2026-06-17 update:** The two-call loop described in Issues #3/#5 was replaced
+> by a loop-based agent. The two-call's `tools=None` on Call 2 caused DeepSeek
+> models to hallucinate `<invoke>` tags. The loop keeps tools always available —
+> the model uses structured `tool_calls` instead of hacking via raw text.
+> See `docs/agent_loop.md`.
+
 ---
 
 ## Issue #1: COMPLETED transition never implemented

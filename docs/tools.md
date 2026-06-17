@@ -123,10 +123,13 @@ Return type: RequestReviewResult
 ### `confirm_order`
 ```
 Available in: REVIEW
-Parameters:   none
+Parameters:   payment_method (str)="cash" — "cash" or "link"
 
-Generates a fake payment ID (UUID). Records order total.
-session._pending_transition = OrderState.COMPLETED
+Generates an order ID and records the order total.
+- "cash" (default): session._pending_transition = OrderState.COMPLETED
+- "link": session._pending_transition = OrderState.PAYMENT_PENDING
+
+Sets session.payment_method for the payment webhook to read.
 
 Return type: ConfirmOrderResult
 ```
@@ -148,6 +151,7 @@ Return type: CancelOrderResult
 | add_to_cart | ✓ | ✓ | — |
 | remove_from_cart | ✓ | ✓ | — |
 | update_item | ✓ | ✓ | — |
+| browse_menu | ✓ | ✓ | ✓ |
 | view_cart | ✓ | ✓ | ✓ |
 | set_customer_info | ✓ | ✓ | — |
 | request_review | ✓ | — | — |
@@ -159,15 +163,15 @@ Return type: CancelOrderResult
 ```python
 TOOLS_BY_STATE: dict[OrderState, list[callable]] = {
     OrderState.BUILDING: [
-        add_to_cart, remove_from_cart, update_item, view_cart,
+        browse_menu, add_to_cart, remove_from_cart, update_item, view_cart,
         set_customer_info, request_review, cancel_order,
     ],
     OrderState.REVIEW: [
-        add_to_cart, remove_from_cart, update_item, view_cart,
+        browse_menu, add_to_cart, remove_from_cart, update_item, view_cart,
         set_customer_info, confirm_order, cancel_order,
     ],
     OrderState.PAYMENT_PENDING: [
-        view_cart, cancel_order,
+        browse_menu, view_cart, cancel_order,
     ],
 }
 ```
