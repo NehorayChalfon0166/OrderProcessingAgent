@@ -33,6 +33,11 @@ class AppConfig:
     orders_dir: str = "orders"
     sessions_dir: str = "sessions"
 
+    # Twilio (used by integration branches, harmless on master)
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_whatsapp_number: str = "+14155238886"  # sandbox default
+
     # Debug
     debug: bool = False
 
@@ -52,6 +57,11 @@ class AppConfig:
             menu_path=os.getenv("MENU_PATH", "menu.json"),
             orders_dir=os.getenv("ORDERS_DIR", "orders"),
             sessions_dir=os.getenv("SESSIONS_DIR", "sessions"),
+            twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
+            twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
+            twilio_whatsapp_number=os.getenv(
+                "TWILIO_WHATSAPP_NUMBER", "+14155238886"
+            ),
             debug=os.getenv("DEBUG", "false").lower() == "true",
         )
 
