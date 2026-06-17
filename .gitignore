@@ -4,4 +4,3 @@ __pycache__/
 orders/
 .pytest_cache/
 sessions/
-orders/
