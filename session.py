@@ -51,6 +51,10 @@ class OrderSession(BaseModel):
         default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(),
         description="ISO 8601 last-update timestamp",
     )
+    payment_method: str | None = Field(
+        default=None,
+        description="'cash' or 'link' — set by confirm_order, read by payment webhook",
+    )
 
     # Internal signal — set by tools, read and cleared by agent loop.
     # Excluded from serialization and never seen by the LLM.

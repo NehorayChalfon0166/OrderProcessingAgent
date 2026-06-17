@@ -339,17 +339,24 @@ def request_review(
     return RequestReviewResult(success=True, issues=[])
 
 
-@tool(description="Confirm the order and initiate payment")
+@tool(description="Confirm the order and choose payment method: 'cash' or 'link'")
 def confirm_order(
     session: OrderSession,
     catalogue: Catalogue,
     pricing: PricingEngine,
+    payment_method: str = "cash",
 ) -> ConfirmOrderResult:
     order_type = session.customer.order_type or OrderType.PICKUP
     _, _, total = pricing.compute_totals(session.cart, order_type)
     order_id = str(uuid.uuid4())[:8].upper()
 
-    session._pending_transition = OrderState.COMPLETED
+    session.payment_method = payment_method
+
+    if payment_method == "link":
+        session._pending_transition = OrderState.PAYMENT_PENDING
+    else:
+        session._pending_transition = OrderState.COMPLETED
+
     return ConfirmOrderResult(success=True, order_id=order_id, total=total)
 
 

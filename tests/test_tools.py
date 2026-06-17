@@ -336,13 +336,32 @@ class TestRequestReview:
 
 
 class TestConfirmOrder:
-    def test_confirm_sets_transition(self, session, catalogue, pricing):
+    def test_confirm_cash_defaults_to_completed(self, session, catalogue, pricing):
+        """Default payment_method='cash' goes straight to COMPLETED."""
         add_to_cart(session, catalogue, pricing, product_name="Margherita")
         set_customer_info(session, catalogue, pricing, name="John", phone="555-0123")
         result = confirm_order(session, catalogue, pricing)
         assert result.success is True
         assert result.order_id is not None
         assert result.total > 0
+        assert session.payment_method == "cash"
+        assert session._pending_transition == OrderState.COMPLETED
+
+    def test_confirm_link_sets_payment_pending(self, session, catalogue, pricing):
+        """payment_method='link' transitions to PAYMENT_PENDING."""
+        add_to_cart(session, catalogue, pricing, product_name="Margherita")
+        set_customer_info(session, catalogue, pricing, name="John", phone="555-0123")
+        result = confirm_order(session, catalogue, pricing, payment_method="link")
+        assert result.success is True
+        assert session.payment_method == "link"
+        assert session._pending_transition == OrderState.PAYMENT_PENDING
+
+    def test_confirm_explicit_cash(self, session, catalogue, pricing):
+        """Explicit payment_method='cash' same as default."""
+        add_to_cart(session, catalogue, pricing, product_name="Margherita")
+        set_customer_info(session, catalogue, pricing, name="John", phone="555-0123")
+        result = confirm_order(session, catalogue, pricing, payment_method="cash")
+        assert session.payment_method == "cash"
         assert session._pending_transition == OrderState.COMPLETED
 
 
