@@ -28,10 +28,11 @@ master: all core logic
 - `models.py`, `catalogue.py`, `pricing.py`, `tools.py`
 - `session.py`, `session_router.py` — session lifecycle and identity mapping
 - `agent_loop.py`, `prompts.py`, `llm_client.py`
-- `config.py` — all env vars (channel-specific ones are just config)
-- `main.py` — CLI entry point + server subcommand structure
+- `config.py` — all env vars (channel fields allowed as dormant defaults)
+- `main.py` — CLI entry point only
+- `requirements.txt` — core dependencies only
 - All tests for the above
-- All docs for the above
+- All docs EXCEPT `docs/{channel}_integration.md`
 
 ### What belongs on integration branches
 
@@ -40,6 +41,7 @@ master: all core logic
 - `docs/{channel}_integration.md` — channel-specific documentation
 - `tests/test_{channel}_*.py` — channel-specific tests
 - `.env.example` additions for that channel
+- Channel-specific dependencies documented but not forced on master
 
 ### What integration branches must NOT do
 
