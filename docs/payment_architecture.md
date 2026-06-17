@@ -94,3 +94,26 @@ Payment is a security boundary. The LLM can suggest, but only Python code:
 
 No `process_payment` tool. No LLM webhook. Payment confirmation comes from
 an external processor with cryptographic signature verification.
+
+## Activation Dependency Chain
+
+When ready to activate payment, implement in this order:
+
+```
+1. Choose payment processor
+   └─ Determines webhook format, signature scheme, link structure
+   
+2. Master: payment webhook endpoint
+   └─ POST /payment/webhook → verify signature → PAYMENT_PENDING → COMPLETED
+   
+3. Master: Twilio server infrastructure (config, main, requirements)
+   └─ Currently reverted on twilio-integration per CLAUDE.md branching rules
+   
+4. Twilio: rebase onto master
+   └─ Gets payment webhook + server infra from master
+   
+5. Twilio: payment link delivery
+   └─ WhatsApp buttons, SMS fallback, voice "we'll text you" + hangup
+```
+
+Each step depends on the one above it. Building out of order creates dead code.
