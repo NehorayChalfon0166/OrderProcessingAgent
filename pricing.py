@@ -59,6 +59,14 @@ class PricingEngine:
         for topping in menu_data.get("toppings", []):
             self._toppings[topping["id"]] = topping
 
+        for deal in menu_data.get("deals", []):
+            self._items[deal["id"]] = {
+                "id": deal["id"],
+                "price": deal["price"],
+                "category": "Deals",
+                "name": deal["name"],
+            }
+
     # ------------------------------------------------------------------
     # Price Resolution
     # ------------------------------------------------------------------

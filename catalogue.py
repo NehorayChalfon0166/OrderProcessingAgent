@@ -10,6 +10,7 @@ What changed:
 
 from __future__ import annotations
 
+import difflib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -141,7 +142,9 @@ class Catalogue:
             self._toppings_by_id[td.id] = td
             self._toppings_by_name[td.name.lower()] = td
 
-        # Deals
+        # Deals — registered as regular products so find_product / add_to_cart
+        # work without special-casing. DealDef is kept for expand_deal() if
+        # needed later, but add_to_cart uses the ProductDef path.
         for deal in self._menu_data.get("deals", []):
             dd = DealDef(
                 id=deal["id"],
@@ -151,7 +154,18 @@ class Catalogue:
                 includes=deal.get("includes", {}),
             )
             self._deals_by_id[dd.id] = dd
-            self._deals_by_name[self._normalize(dd.name)] = dd
+            self._deals_by_name[dd.name.lower()] = dd
+
+            # Also register as a product for normal lookup
+            dp = ProductDef(
+                id=dd.id,
+                name=dd.name,
+                category="Deals",
+                description=dd.description,
+                flat_price=dd.price,
+            )
+            self._products_by_id[dp.id] = dp
+            self._products_by_name[dp.name.lower()] = dp
 
     # ------------------------------------------------------------------
     # Product Lookup
@@ -160,25 +174,10 @@ class Catalogue:
     def find_product(self, name: str) -> ProductDef | None:
         """Fuzzy match a product by name.
 
-        Match priority:
-          1. Exact case-insensitive match on product name
-          2. Substring match (query is contained in a product name)
-          3. Reverse substring (product name is contained in query)
+        Exact → substring → difflib similarity (handles typos, plurals,
+        missing punctuation like 'couple special' → 'Couple's Special').
         """
-        query = name.lower().strip()
-
-        if query in self._products_by_name:
-            return self._products_by_name[query]
-
-        for pname, product in self._products_by_name.items():
-            if query in pname:
-                return product
-
-        for pname, product in self._products_by_name.items():
-            if pname in query:
-                return product
-
-        return None
+        return self._fuzzy_best_match(name, self._products_by_name)
 
     def get_product(self, product_id: str) -> ProductDef | None:
         """Exact lookup by product ID."""
@@ -190,25 +189,12 @@ class Catalogue:
 
     def find_topping(self, name: str) -> ToppingDef | None:
         """Fuzzy match a topping by name or ID."""
-        query = name.lower().strip()
-
-        if query in self._toppings_by_name:
-            return self._toppings_by_name[query]
-
-        for tname, topping in self._toppings_by_name.items():
-            if query in tname:
-                return topping
-
-        for tname, topping in self._toppings_by_name.items():
-            if tname in query:
-                return topping
-
-        # Match by ID (handles 'extra_cheese' style)
-        id_query = query.replace(" ", "_")
-        if id_query in self._toppings_by_id:
-            return self._toppings_by_id[id_query]
-
-        return None
+        result = self._fuzzy_best_match(name, self._toppings_by_name)
+        if result is not None:
+            return result
+        # Fallback: match by ID (handles 'extra_cheese' style)
+        id_query = name.lower().strip().replace(" ", "_")
+        return self._toppings_by_id.get(id_query)
 
     def get_topping(self, topping_id: str) -> ToppingDef | None:
         """Exact lookup by topping ID."""
@@ -219,40 +205,50 @@ class Catalogue:
     # ------------------------------------------------------------------
 
     def find_deal(self, id_or_name: str) -> DealDef | None:
-        """Fuzzy match a deal by name, fallback to ID.
+        """Fuzzy match a deal by name, fallback to ID."""
+        result = self._fuzzy_best_match(id_or_name, self._deals_by_name)
+        if result is not None:
+            return result
+        return self._deals_by_id.get(id_or_name.lower().strip())
 
-        Match priority:
-          1. Exact case-insensitive match on deal name
-          2. Substring match (query is contained in a deal name)
-          3. Reverse substring (deal name is contained in query)
-          4. Exact match on deal ID
-
-        Punctuation (apostrophes, etc.) is stripped from both query and
-        deal names during fuzzy matching so 'couple special' matches
-        'Couple's Special'.
-        """
-        query = self._normalize(id_or_name)
-
-        if query in self._deals_by_name:
-            return self._deals_by_name[query]
-
-        for dname, deal in self._deals_by_name.items():
-            if query in dname:
-                return deal
-
-        for dname, deal in self._deals_by_name.items():
-            if dname in query:
-                return deal
-
-        if query in self._deals_by_id:
-            return self._deals_by_id[query]
-
-        return None
+    # ------------------------------------------------------------------
+    # Fuzzy Matching
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _normalize(text: str) -> str:
-        """Lowercase and strip punctuation for fuzzy matching."""
-        return text.lower().strip().replace("'", "").replace("’", "")
+    def _fuzzy_best_match(query: str, index: dict[str, object]) -> object | None:
+        """Fuzzy lookup against a name→object index.
+
+        Priority:
+          1. Exact match (case-insensitive, punctuation-normalized)
+          2. Substring (query in key, or key in query)
+          3. difflib similarity ≥ 80% (handles typos, plurals, etc.)
+        """
+        q = query.lower().strip()
+        # Strip common punctuation for exact/substring matching
+        q_norm = q.replace("’", "").replace("’", "")
+
+        # 1. Exact
+        if q_norm in index:
+            return index[q_norm]
+
+        # 2. Substring
+        for key, value in index.items():
+            if q_norm in key or key in q_norm:
+                return value
+
+        # 3. difflib
+        best_score = 0.0
+        best_value = None
+        for key, value in index.items():
+            score = difflib.SequenceMatcher(None, q_norm, key).ratio()
+            if score > best_score:
+                best_score = score
+                best_value = value
+        if best_score >= 0.8:
+            return best_value
+
+        return None
 
     def get_deal(self, deal_id: str) -> DealDef | None:
         """Exact lookup by deal ID."""
@@ -448,24 +444,6 @@ class Catalogue:
 
             if score > 0:
                 scored.append((score, product.name))
-
-        # Also suggest deals with the same fuzzy logic
-        for deal in self._deals_by_id.values():
-            name_lower = deal.name.lower()
-            score = 0
-            if q == name_lower:
-                score = 100
-            elif q in name_lower:
-                score = 50
-            elif name_lower in q:
-                score = 25
-            else:
-                overlap = self._seq_overlap(q, name_lower)
-                if overlap >= 0.6:
-                    score = int(overlap * 40)
-
-            if score > 0:
-                scored.append((score, f"{deal.name} [Deal]"))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [name for _, name in scored[:limit]]

@@ -119,10 +119,11 @@ class TestAddToCart:
         assert result.item is None
         assert len(result.suggestions) == 0
 
-    def test_not_found_returns_suggestions(self, session, catalogue, pricing):
+    def test_fuzzy_catches_misspelling(self, session, catalogue, pricing):
+        """difflib fuzzy matching catches common misspellings directly."""
         result = add_to_cart(session, catalogue, pricing, product_name="peproni")
-        assert result.success is False
-        assert len(result.suggestions) > 0
+        assert result.success is True
+        assert result.item.product_id == "pizza_pepperoni"
 
     def test_invalid_size_warns(self, session, catalogue, pricing):
         result = add_to_cart(
