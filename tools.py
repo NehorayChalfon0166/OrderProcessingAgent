@@ -146,9 +146,17 @@ def add_to_cart(
     options = options or {}
     issues: list[str] = []
 
-    # 1. Try product
+    # 1. Try product, then deal
     product = catalogue.find_product(product_name)
     if product is None:
+        # Check if they meant a deal (e.g. "couple special" without apostrophe)
+        deal = catalogue.find_deal(product_name)
+        if deal is not None:
+            items = catalogue.expand_deal(deal)
+            for item in items:
+                session.cart.append(pricing.price_item(item))
+            return AddToCartResult(success=True, item=None, issues=issues)
+
         suggestions = catalogue.get_product_suggestions(product_name)
         return AddToCartResult(success=False, suggestions=suggestions)
 

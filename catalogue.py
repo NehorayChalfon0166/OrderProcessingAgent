@@ -151,7 +151,7 @@ class Catalogue:
                 includes=deal.get("includes", {}),
             )
             self._deals_by_id[dd.id] = dd
-            self._deals_by_name[dd.name.lower()] = dd
+            self._deals_by_name[self._normalize(dd.name)] = dd
 
     # ------------------------------------------------------------------
     # Product Lookup
@@ -219,16 +219,40 @@ class Catalogue:
     # ------------------------------------------------------------------
 
     def find_deal(self, id_or_name: str) -> DealDef | None:
-        """Fuzzy match a deal by name, fallback to ID."""
-        query = id_or_name.lower().strip()
+        """Fuzzy match a deal by name, fallback to ID.
+
+        Match priority:
+          1. Exact case-insensitive match on deal name
+          2. Substring match (query is contained in a deal name)
+          3. Reverse substring (deal name is contained in query)
+          4. Exact match on deal ID
+
+        Punctuation (apostrophes, etc.) is stripped from both query and
+        deal names during fuzzy matching so 'couple special' matches
+        'Couple's Special'.
+        """
+        query = self._normalize(id_or_name)
 
         if query in self._deals_by_name:
             return self._deals_by_name[query]
+
+        for dname, deal in self._deals_by_name.items():
+            if query in dname:
+                return deal
+
+        for dname, deal in self._deals_by_name.items():
+            if dname in query:
+                return deal
 
         if query in self._deals_by_id:
             return self._deals_by_id[query]
 
         return None
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Lowercase and strip punctuation for fuzzy matching."""
+        return text.lower().strip().replace("'", "").replace("’", "")
 
     def get_deal(self, deal_id: str) -> DealDef | None:
         """Exact lookup by deal ID."""
@@ -399,10 +423,11 @@ class Catalogue:
         return list(self._deals_by_id.values())
 
     def get_product_suggestions(self, query: str, limit: int = 5) -> list[str]:
-        """Return product name suggestions for a failed lookup.
+        """Return product and deal name suggestions for a failed lookup.
 
         More lenient than find_product — handles misspellings via
         character-sequence overlap (e.g. 'peproni' matches 'Pepperoni').
+        Also searches deal names.
         """
         q = query.lower().strip()
         scored: list[tuple[int, str]] = []
@@ -417,13 +442,30 @@ class Catalogue:
             elif name_lower in q:
                 score = 25
             else:
-                # Character-sequence overlap for misspellings
                 overlap = self._seq_overlap(q, name_lower)
                 if overlap >= 0.6:
                     score = int(overlap * 40)
 
             if score > 0:
                 scored.append((score, product.name))
+
+        # Also suggest deals with the same fuzzy logic
+        for deal in self._deals_by_id.values():
+            name_lower = deal.name.lower()
+            score = 0
+            if q == name_lower:
+                score = 100
+            elif q in name_lower:
+                score = 50
+            elif name_lower in q:
+                score = 25
+            else:
+                overlap = self._seq_overlap(q, name_lower)
+                if overlap >= 0.6:
+                    score = int(overlap * 40)
+
+            if score > 0:
+                scored.append((score, f"{deal.name} [Deal]"))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [name for _, name in scored[:limit]]
