@@ -52,7 +52,7 @@ class MessageRole(str, Enum):
 class CartTopping(BaseModel):
     """A single topping selected for a pizza, with its price resolved from the menu."""
 
-    topping_id: str = Field(description="Topping identifier matching menu.json")
+    topping_id: str = Field(description="Topping identifier matching the restaurant menu")
     name: str = Field(description="Human-readable topping name")
     price: float = Field(ge=0, description="Price of this topping from the menu")
 

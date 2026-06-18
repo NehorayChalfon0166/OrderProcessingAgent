@@ -2,7 +2,7 @@
 
 Python owns ALL price computation. The LLM extracts what the customer wants
 via tool calls; this module resolves every dollar amount from the single
-source of truth (menu.json). This separation ensures prices are always
+source of truth (the restaurant's menu data). This separation ensures prices are always
 accurate regardless of LLM behavior.
 
 Adapted from v1 — OrderItem → CartItem, ToppingSelection → CartTopping.
@@ -17,7 +17,7 @@ from models import CartItem, OrderType
 class PricingEngine:
     """Computes prices for cart items and full orders.
 
-    Built from the raw menu dict loaded from menu.json. Internally maintains
+    Built from the raw menu dict provided by the catalogue. Internally maintains
     fast lookup tables so pricing is O(1) per item.
     """
 

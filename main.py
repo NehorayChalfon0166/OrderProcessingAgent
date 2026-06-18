@@ -14,15 +14,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_loop import process_turn
 from config import AppConfig
 from llm_client import LLMClient
-from models import OrderState, OrderType
+from models import OrderType
 from restaurant import RestaurantRegistry
 from session import OrderSession
 
@@ -116,7 +115,7 @@ def save_order(
         "delivery_fee": delivery_fee,
         "total": total,
         "order_type": ot.value,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     order_dir = Path(orders_dir) / session.restaurant_id
@@ -146,10 +145,15 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
             )
             return
     else:
-        ctx = registry.get_default()
+        try:
+            ctx = registry.get_default()
+        except ValueError as e:
+            print_system(f"Error: {e}")
+            return
 
     catalogue = ctx.catalogue
     pricing = ctx.pricing
+    llm_client = LLMClient(config)
     sessions_dir = f"{config.sessions_dir}/{ctx.config.id}"
 
     # Create session
@@ -254,30 +258,48 @@ def main() -> None:
         "--debug", action="store_true", help="Enable debug logging"
     )
     parser.add_argument(
-        "--restaurant", default=None,
-        help="Restaurant ID to use (defaults to first in restaurants.json)",
-    )
-    parser.add_argument(
         "--list-restaurants", action="store_true",
         help="List configured restaurants and exit",
     )
+    sub = parser.add_subparsers(dest="command", help="Run mode")
+
+    # ── CLI subcommand ────────────────────────────────────────────────────
+    cli_parser = sub.add_parser("cli", help="Interactive terminal session")
+    cli_parser.add_argument(
+        "--debug", action="store_true", help="Enable debug logging"
+    )
+    cli_parser.add_argument(
+        "--restaurant", default=None,
+        help="Restaurant ID to use (defaults to first in restaurants.json)",
+    )
+    cli_parser.add_argument(
+        "--list-restaurants", action="store_true",
+        help="List configured restaurants and exit",
+    )
+
+    # ── Server subcommand ─────────────────────────────────────────────────
+    srv_parser = sub.add_parser("server", help="Start Twilio webhook server")
+    srv_parser.add_argument(
+        "--port", type=int, default=8080, help="Port to listen on (default: 8080)"
+    )
+    srv_parser.add_argument(
+        "--host", type=str, default="0.0.0.0", help="Host to bind to"
+    )
+
     args = parser.parse_args()
 
-    # Load config
-    try:
-        config = AppConfig.from_env()
-    except ValueError as e:
-        print(f"\n❌ Configuration error: {e}")
-        print("   Copy .env.example to .env and add your DeepSeek API key.")
-        sys.exit(1)
+    # Default to CLI if no subcommand given
+    if args.command is None:
+        args.command = "cli"
 
-    if args.debug:
-        config.debug = True
-
-    setup_logging(config.debug)
-
-    # --list-restaurants
-    if args.list_restaurants:
+    # ── --list-restaurants works without a subcommand too ─────────────
+    list_flag = getattr(args, "list_restaurants", False)
+    if list_flag:
+        try:
+            config = AppConfig.from_env()
+        except ValueError as e:
+            print(f"\n❌ Configuration error: {e}")
+            sys.exit(1)
         try:
             registry = RestaurantRegistry(config.restaurants_path)
             print("\nConfigured restaurants:\n")
@@ -292,12 +314,44 @@ def main() -> None:
             sys.exit(1)
         return
 
-    print(BANNER)
-
+    # Load config
     try:
-        run_session(config, restaurant_id=args.restaurant)
-    except KeyboardInterrupt:
-        print("\n\n💡 Session interrupted. Goodbye!")
+        config = AppConfig.from_env()
+    except ValueError as e:
+        print(f"\n❌ Configuration error: {e}")
+        print("   Copy .env.example to .env and add your DeepSeek API key.")
+        sys.exit(1)
+
+    debug = getattr(args, "debug", False)
+    if debug:
+        config.debug = True
+
+    setup_logging(config.debug)
+
+    if args.command == "cli":
+        restaurant_id = getattr(args, "restaurant", None)
+        print(BANNER)
+        try:
+            run_session(config, restaurant_id=restaurant_id)
+        except KeyboardInterrupt:
+            print("\n\n💡 Session interrupted. Goodbye!")
+    elif args.command == "server":
+        _run_server(args, config)
+
+
+def _run_server(args, config: AppConfig) -> None:
+    """Validate Twilio config and start the FastAPI server."""
+    if not config.twilio_account_sid:
+        print("❌ TWILIO_ACCOUNT_SID is required for server mode.")
+        sys.exit(1)
+    if not config.twilio_auth_token:
+        print("❌ TWILIO_AUTH_TOKEN is required for server mode.")
+        sys.exit(1)
+
+    import uvicorn
+
+    print(f"🚀 Starting Twilio webhook server on {args.host}:{args.port}")
+    uvicorn.run("server:app", host=args.host, port=args.port, reload=False)
 
 
 if __name__ == "__main__":

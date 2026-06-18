@@ -1,4 +1,4 @@
-"""Product catalogue — loads menu.json, provides lookup, validation, and hints.
+"""Product catalogue — loads a restaurant menu JSON file, provides lookup, validation, and hints.
 
 Evolution of v1's menu_manager.py. The fuzzy matching core is preserved.
 What changed:
@@ -109,7 +109,7 @@ class Catalogue:
         if not menu_file.exists():
             raise FileNotFoundError(
                 f"Menu file not found at '{menu_file.resolve()}'. "
-                f"Make sure menu.json exists in the project directory."
+                f"Make sure the menu file exists at the configured path."
             )
         with open(menu_file, "r", encoding="utf-8") as f:
             return json.load(f)

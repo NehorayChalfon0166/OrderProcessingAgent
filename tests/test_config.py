@@ -30,7 +30,7 @@ class TestAppConfig:
             config = AppConfig.from_env()
             assert config.llm_model == "deepseek-v4-flash"
             assert config.llm_base_url == "https://api.deepseek.com"
-            assert config.menu_path == "menu.json"
+            assert config.restaurants_path == "restaurants.json"
             assert config.orders_dir == "orders"
             assert config.sessions_dir == "sessions"
             assert config.debug is False
@@ -42,7 +42,7 @@ class TestAppConfig:
                 "DEEPSEEK_API_KEY": "sk-test",
                 "LLM_MODEL": "deepseek-v4-pro",
                 "LLM_BASE_URL": "https://custom.endpoint/v1",
-                "MENU_PATH": "custom_menu.json",
+                "RESTAURANTS_PATH": "custom_restaurants.json",
                 "ORDERS_DIR": "custom_orders",
                 "SESSIONS_DIR": "custom_sessions",
                 "DEBUG": "true",
@@ -52,7 +52,7 @@ class TestAppConfig:
             config = AppConfig.from_env()
             assert config.llm_model == "deepseek-v4-pro"
             assert config.llm_base_url == "https://custom.endpoint/v1"
-            assert config.menu_path == "custom_menu.json"
+            assert config.restaurants_path == "custom_restaurants.json"
             assert config.orders_dir == "custom_orders"
             assert config.sessions_dir == "custom_sessions"
             assert config.debug is True

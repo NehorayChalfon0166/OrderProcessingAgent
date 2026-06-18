@@ -98,7 +98,7 @@ def process_turn(
     )
     fallback = "I've processed your request. Is there anything else?"
     session.add_assistant_message(content=fallback)
-    session.save()
+    session.save(sessions_dir)
     return fallback
 
 
