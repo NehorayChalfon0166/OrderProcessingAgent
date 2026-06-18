@@ -39,6 +39,10 @@ class AppConfig:
     twilio_auth_token: str = ""
     twilio_whatsapp_number: str = "+14155238886"  # sandbox default
 
+    # Stripe (used by integration branches, harmless on master)
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+
     # Debug
     debug: bool = False
 
@@ -64,6 +68,8 @@ class AppConfig:
             twilio_whatsapp_number=os.getenv(
                 "TWILIO_WHATSAPP_NUMBER", "+14155238886"
             ),
+            stripe_secret_key=os.getenv("STRIPE_SECRET_KEY", ""),
+            stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET", ""),
             debug=os.getenv("DEBUG", "false").lower() == "true",
         )
 
