@@ -1,0 +1,104 @@
+#!/bin/bash
+# Pre-commit hook — enforces CLAUDE.md rules automatically.
+#
+# 1. Blocks *-integration branches from modifying files that exist on master.
+# 2. Runs the test suite.
+# 3. Runs integration tests.
+# 4. Runs live smoke test on the CLI entry point.
+#
+# Any failure blocks the commit. Use --no-verify to bypass in emergencies.
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+branch=$(git branch --show-current)
+
+# ── Step 0: Branch check (skip on master and feature branches) ───────────
+if [ "$branch" != "master" ] && [[ "$branch" =~ -integration$ ]]; then
+    master_files=$(git ls-tree -r master --name-only 2>/dev/null)
+    if [ -n "$master_files" ]; then
+        changed=$(git diff --cached --name-only)
+        candidates=$(comm -12 <(echo "$master_files" | sort) <(echo "$changed" | sort))
+
+        violations=""
+        for f in $candidates; do
+            if ! git diff --quiet --cached master -- "$f" 2>/dev/null; then
+                violations="$violations $f"
+            fi
+        done
+        violations=$(echo "$violations" | xargs)
+
+        if [ -n "$violations" ]; then
+            echo ""
+            echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  ❌  BRANCH VIOLATION                                       ║${NC}"
+            echo -e "${RED}╚══════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo "  Integration branches must NOT modify files that exist on master."
+            echo "  Core improvements → master branch, then rebase integration branch."
+            echo ""
+            echo "  Violating files:"
+            for f in $violations; do
+                echo "    - $f"
+            done
+            echo ""
+            echo "  See CLAUDE.md § Branching Strategy for rules."
+            echo ""
+            exit 1
+        fi
+    fi
+fi
+
+# ── Step 1: Test suite ──────────────────────────────────────────────────
+echo -n "  pre-commit: pytest ....................... "
+if python -m pytest tests/ -q > /dev/null 2>&1; then
+    echo -e "${GREEN}OK${NC}"
+else
+    echo -e "${RED}FAIL${NC}"
+    echo ""
+    echo "  Tests failed. Run 'python -m pytest tests/ -v' to see details."
+    echo ""
+    exit 1
+fi
+
+# ── Step 2: Integration tests ───────────────────────────────────────────
+echo -n "  pre-commit: integration tests ............ "
+if python tests/test_integration.py > /dev/null 2>&1; then
+    echo -e "${GREEN}OK${NC}"
+else
+    echo -e "${RED}FAIL${NC}"
+    echo ""
+    echo "  Integration tests failed. Run 'python tests/test_integration.py' to see details."
+    echo ""
+    exit 1
+fi
+
+# ── Step 3: Live smoke test — CLI entry point ────────────────────────────
+echo -n "  pre-commit: live smoke test .............. "
+result=$(python -c "
+from unittest import mock; import sys, io
+with mock.patch('main.process_turn', return_value='Welcome!'):
+    from config import AppConfig; from main import run_session
+    sys.stdin = io.StringIO('quit\n')
+    run_session(AppConfig.from_env())
+    print('OK')
+" 2>&1)
+if echo "$result" | grep -q "OK"; then
+    echo -e "${GREEN}OK${NC}"
+else
+    echo -e "${RED}FAIL${NC}"
+    echo ""
+    echo "  Live smoke test failed. The CLI entry point crashed."
+    echo "  Error:"
+    echo "$result" | head -5
+    echo ""
+    exit 1
+fi
+
+echo ""
+echo -e "${GREEN}  ✓ All pre-commit checks passed${NC}"
+echo ""
+exit 0
