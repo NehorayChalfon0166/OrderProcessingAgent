@@ -32,6 +32,7 @@ def mock_deps():
         "_router": srv._router,
         "_orders_dir": srv._orders_dir,
         "_locks": dict(srv._locks),
+        "_lock_access": dict(srv._lock_access),
     }
 
     srv._catalogue = mock_cat
@@ -41,6 +42,7 @@ def mock_deps():
     srv._router = mock_router
     srv._orders_dir = "/tmp/test_orders"
     srv._locks.clear()
+    srv._lock_access.clear()
 
     yield {"catalogue": mock_cat, "pricing": mock_prc, "llm": mock_llm,
            "whatsapp": mock_wa, "router": mock_router}
@@ -52,6 +54,7 @@ def mock_deps():
     srv._router = orig["_router"]
     srv._orders_dir = orig["_orders_dir"]
     srv._locks = orig["_locks"]
+    srv._lock_access = orig["_lock_access"]
 
 
 @pytest.fixture
@@ -182,3 +185,57 @@ class TestStaleSession:
         s = OrderSession()
         s.updated_at = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
         assert _is_session_stale(s)
+
+
+class TestSignatureValidation:
+    def test_returns_500_when_twilio_not_initialised(self, mock_deps):
+        import server as srv
+        srv._twilio = None
+        with mock.patch.object(
+            __import__("twilio_client").TwilioClient,
+            "validate_webhook", return_value=True,
+        ):
+            from fastapi.testclient import TestClient
+            client = TestClient(srv.app)
+            form_data = "WaId=972539534345&Body=Hi&NumMedia=0&From=whatsapp"
+            resp = client.post(
+                "/whatsapp/webhook", content=form_data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            assert resp.status_code == 500
+            assert "not configured" in resp.text.lower()
+
+
+class TestLockEviction:
+    def test_sweep_removes_stale(self):
+        import server as srv
+        import time
+        srv._locks.clear()
+        srv._lock_access.clear()
+        srv._locks["a"] = asyncio.Lock()
+        srv._locks["b"] = asyncio.Lock()
+        srv._lock_access["a"] = time.monotonic() - 99999  # very stale
+        srv._lock_access["b"] = time.monotonic()          # fresh
+        orig = srv._MAX_LOCKS_BEFORE_SWEEP
+        srv._MAX_LOCKS_BEFORE_SWEEP = 1
+        try:
+            srv._sweep_stale_locks()
+        finally:
+            srv._MAX_LOCKS_BEFORE_SWEEP = orig
+        assert "a" not in srv._locks
+        assert "b" in srv._locks
+
+
+class TestEventLoopOffloading:
+    def test_process_turn_runs_in_thread(self, client, mock_deps):
+        from session import OrderSession
+        session = OrderSession()
+        mock_deps["router"].get_or_create.return_value = session
+        with mock.patch("server.asyncio.to_thread") as mock_tt:
+            mock_tt.return_value = "Thanks!"
+            form_data = "WaId=972539534345&Body=Hi&NumMedia=0&From=whatsapp"
+            client.post(
+                "/whatsapp/webhook", content=form_data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            assert mock_tt.called

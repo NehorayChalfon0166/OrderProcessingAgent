@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time as _time_module
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -41,13 +42,17 @@ _twilio: TwilioClient | None = None
 _router: SessionRouter | None = None
 _orders_dir: str = "orders"
 _locks: dict[str, asyncio.Lock] = {}
+_lock_access: dict[str, float] = {}  # phone → monotonic timestamp
 
 # Empty TwiML — we reply asynchronously via REST
 _EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
-# Session staleness threshold — if a session hasn't been touched in this many
-# hours, the agent asks whether to continue or start fresh.
+# Session staleness threshold
 _STALE_HOURS: float = 2.0
+
+# Lock eviction
+_LOCK_TTL_SECONDS: float = 3600.0  # 1 hour
+_MAX_LOCKS_BEFORE_SWEEP: int = 1000
 
 
 def _get_lock(identity: str) -> asyncio.Lock:
@@ -56,7 +61,24 @@ def _get_lock(identity: str) -> asyncio.Lock:
     if lock is None:
         lock = asyncio.Lock()
         _locks[identity] = lock
+    _lock_access[identity] = _time_module.monotonic()
     return lock
+
+
+def _sweep_stale_locks() -> None:
+    """Remove locks not accessed within TTL. Only triggers above threshold."""
+    if len(_locks) < _MAX_LOCKS_BEFORE_SWEEP:
+        return
+    now = _time_module.monotonic()
+    stale = [
+        phone for phone, ts in _lock_access.items()
+        if now - ts > _LOCK_TTL_SECONDS
+    ]
+    for phone in stale:
+        _locks.pop(phone, None)
+        _lock_access.pop(phone, None)
+    if stale:
+        logger.info("Swept %d stale locks (%d remaining)", len(stale), len(_locks))
 
 
 def _is_session_stale(session) -> bool:
@@ -134,8 +156,12 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
     # Read form-encoded body
     form_body: bytes = await request.body()
 
-    # ── Signature validation ──────────────────────────────────────────────
-    # Parse form params into a flat dict for the validator
+    # ── Guard: server must be initialised ──────────────────────────────
+    if _twilio is None:
+        logger.error("Twilio client not initialised — server misconfiguration")
+        raise HTTPException(status_code=500, detail="Server not configured")
+
+    # ── Signature validation ───────────────────────────────────────────
     flat_params: dict[str, str] = {}
     try:
         parsed = parse_qs(form_body.decode("utf-8"))
@@ -147,7 +173,7 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
     signature = request.headers.get("X-Twilio-Signature", "")
     url = str(request.url)
 
-    if _twilio is not None and not TwilioClient.validate_webhook(
+    if not TwilioClient.validate_webhook(
         url, flat_params, signature, _twilio.auth_token
     ):
         logger.warning("Invalid Twilio signature for %s", url)
@@ -167,12 +193,10 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
     assert _pricing is not None
     assert _llm is not None
 
-    # ── Process ───────────────────────────────────────────────────────────
+    # ── Process (offloaded to thread to avoid blocking the event loop) ──
     session = _router.get_or_create(wa_id)
     async with _get_lock(wa_id):
         try:
-            # If the session is stale, prepend a context note so the LLM
-            # asks whether to continue or start fresh.
             if _is_session_stale(session):
                 text = (
                     f"[The customer had an unfinished order from "
@@ -180,7 +204,9 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                     f"or start fresh before proceeding.]\n\n{text}"
                 )
 
-            response = process_turn(session, text, _catalogue, _pricing, _llm)
+            response = await asyncio.to_thread(
+                process_turn, session, text, _catalogue, _pricing, _llm
+            )
             session.save(_router.sessions_dir)
             if session.is_complete:
                 _save_order_file(session)
@@ -191,11 +217,16 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                 "Please try again in a moment."
             )
 
-    # ── Reply ─────────────────────────────────────────────────────────────
+    # ── Reply (also in thread — Twilio REST is blocking) ────────────────
     if response.strip():
         try:
-            _twilio.send_whatsapp_message(wa_id, response)
+            await asyncio.to_thread(
+                _twilio.send_whatsapp_message, wa_id, response
+            )
         except Exception as e:
-            logger.error("Failed to send WhatsApp message to %s: %s", wa_id[:6], e)
+            logger.error(
+                "Failed to send WhatsApp message to %s: %s", wa_id[:6], e
+            )
 
+    _sweep_stale_locks()
     return PlainTextResponse(_EMPTY_TWIML, media_type="application/xml")
