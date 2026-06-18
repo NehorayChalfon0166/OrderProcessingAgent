@@ -13,7 +13,7 @@ from agent_loop import _apply_transition, _lookup_tool, process_turn
 
 @pytest.fixture
 def catalogue():
-    return Catalogue("menu.json")
+    return Catalogue("menus/marios_pizzeria.json")
 
 
 @pytest.fixture

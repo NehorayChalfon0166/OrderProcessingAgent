@@ -27,6 +27,10 @@ class OrderSession(BaseModel):
         default_factory=lambda: str(uuid.uuid4())[:8].upper(),
         description="Unique session identifier",
     )
+    restaurant_id: str = Field(
+        default="",
+        description="Restaurant tenant identifier for this order",
+    )
     state: OrderState = Field(
         default=OrderState.BUILDING,
         description="Current state machine state",

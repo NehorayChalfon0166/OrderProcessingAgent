@@ -20,11 +20,10 @@ from datetime import datetime
 from pathlib import Path
 
 from agent_loop import process_turn
-from catalogue import Catalogue
 from config import AppConfig
 from llm_client import LLMClient
 from models import OrderState, OrderType
-from pricing import PricingEngine
+from restaurant import RestaurantRegistry
 from session import OrderSession
 
 
@@ -99,8 +98,8 @@ def print_status(session: OrderSession) -> None:
 
 def save_order(
     session: OrderSession,
-    pricing: PricingEngine,
-    catalogue: Catalogue,
+    pricing,
+    restaurant_name: str,
     orders_dir: str,
 ) -> str:
     """Build and save the final order to a JSON file."""
@@ -109,7 +108,8 @@ def save_order(
 
     payload = {
         "order_id": session.session_id,
-        "restaurant": catalogue.restaurant_name,
+        "restaurant_id": session.restaurant_id,
+        "restaurant": restaurant_name,
         "items": [item.model_dump() for item in session.cart],
         "customer": session.customer.model_dump(),
         "subtotal": subtotal,
@@ -119,10 +119,11 @@ def save_order(
         "timestamp": datetime.now().isoformat(),
     }
 
-    Path(orders_dir).mkdir(parents=True, exist_ok=True)
+    order_dir = Path(orders_dir) / session.restaurant_id
+    order_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"order_{session.session_id}_{ts}.json"
-    filepath = Path(orders_dir) / filename
+    filename = f"{session.session_id}_{ts}.json"
+    filepath = order_dir / filename
     filepath.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return str(filepath)
 
@@ -130,23 +131,38 @@ def save_order(
 # ── Main Loop ─────────────────────────────────────────────────────────────────
 
 
-def run_session(config: AppConfig) -> None:
+def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
     logger = logging.getLogger("main")
 
-    # Initialize components
-    logger.info("Loading menu from %s", config.menu_path)
-    catalogue = Catalogue(config.menu_path)
-    pricing = PricingEngine(catalogue.menu_data)
-    llm_client = LLMClient(config)
+    # Initialize registry and select restaurant
+    registry = RestaurantRegistry(config.restaurants_path)
+    if restaurant_id:
+        ctx = registry.get_by_id(restaurant_id)
+        if ctx is None:
+            print_system(f"Restaurant '{restaurant_id}' not found.")
+            print_system(
+                f"Available restaurants: "
+                f"{', '.join(c.id for c in registry.list_restaurants())}"
+            )
+            return
+    else:
+        ctx = registry.get_default()
+
+    catalogue = ctx.catalogue
+    pricing = ctx.pricing
+    sessions_dir = f"{config.sessions_dir}/{ctx.config.id}"
 
     # Create session
-    session = OrderSession()
-    logger.info("New session: %s", session.session_id)
+    session = OrderSession(restaurant_id=ctx.config.id)
+    logger.info("New session: %s (restaurant: %s)", session.session_id, ctx.config.id)
 
     # Generate greeting
-    print_system("Starting new order session...")
+    print_system(f"Starting new order at {ctx.config.name}...")
     try:
-        greeting = process_turn(session, "Hi", catalogue, pricing, llm_client)
+        greeting = process_turn(
+            session, "Hi", catalogue, pricing, llm_client,
+            sessions_dir=sessions_dir,
+        )
         print_agent(greeting)
     except Exception as e:
         logger.error("Failed to generate greeting: %s", e)
@@ -180,9 +196,12 @@ def run_session(config: AppConfig) -> None:
 
         if user_input.lower() == "restart":
             print_system("Starting a new order...")
-            session = OrderSession()
+            session = OrderSession(restaurant_id=ctx.config.id)
             try:
-                greeting = process_turn(session, "Hi", catalogue, pricing, llm_client)
+                greeting = process_turn(
+                    session, "Hi", catalogue, pricing, llm_client,
+                    sessions_dir=sessions_dir,
+                )
                 print_agent(greeting)
             except Exception:
                 print_system("Error reconnecting.")
@@ -190,7 +209,10 @@ def run_session(config: AppConfig) -> None:
 
         # Process through agent loop
         try:
-            response = process_turn(session, user_input, catalogue, pricing, llm_client)
+            response = process_turn(
+                session, user_input, catalogue, pricing, llm_client,
+                sessions_dir=sessions_dir,
+            )
             print_agent(response)
         except Exception as e:
             logger.error("Error processing message: %s", e, exc_info=True)
@@ -200,7 +222,9 @@ def run_session(config: AppConfig) -> None:
         # Check terminal states
         if session.is_complete:
             try:
-                filepath = save_order(session, pricing, catalogue, config.orders_dir)
+                filepath = save_order(
+                    session, pricing, ctx.config.name, config.orders_dir,
+                )
                 order_type = session.customer.order_type or OrderType.PICKUP
                 _, _, total = pricing.compute_totals(session.cart, order_type)
                 print_system(f"Order saved to: {filepath}")
@@ -229,6 +253,14 @@ def main() -> None:
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug logging"
     )
+    parser.add_argument(
+        "--restaurant", default=None,
+        help="Restaurant ID to use (defaults to first in restaurants.json)",
+    )
+    parser.add_argument(
+        "--list-restaurants", action="store_true",
+        help="List configured restaurants and exit",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -244,10 +276,26 @@ def main() -> None:
 
     setup_logging(config.debug)
 
+    # --list-restaurants
+    if args.list_restaurants:
+        try:
+            registry = RestaurantRegistry(config.restaurants_path)
+            print("\nConfigured restaurants:\n")
+            for r in registry.list_restaurants():
+                print(f"  {r.id}")
+                print(f"    Name:   {r.name}")
+                print(f"    Menu:   {r.menu_path}")
+                print(f"    Phone:  {r.twilio_phone}")
+                print()
+        except Exception as e:
+            print(f"\n❌ Error loading restaurants: {e}")
+            sys.exit(1)
+        return
+
     print(BANNER)
 
     try:
-        run_session(config)
+        run_session(config, restaurant_id=args.restaurant)
     except KeyboardInterrupt:
         print("\n\n💡 Session interrupted. Goodbye!")
 

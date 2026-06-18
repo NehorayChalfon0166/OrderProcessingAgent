@@ -9,7 +9,7 @@ from models import CartTopping
 @pytest.fixture
 def catalogue():
     """Load the real menu.json for testing."""
-    return Catalogue("menu.json")
+    return Catalogue("menus/marios_pizzeria.json")
 
 
 class TestProductLookup:

@@ -22,7 +22,7 @@ from tools import (
 
 @pytest.fixture
 def catalogue():
-    return Catalogue("menu.json")
+    return Catalogue("menus/marios_pizzeria.json")
 
 
 @pytest.fixture

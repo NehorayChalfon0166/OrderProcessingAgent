@@ -27,6 +27,11 @@ class TestOrderSession:
         assert session.created_at is not None
         assert session.updated_at is not None
         assert session._pending_transition is None
+        assert session.restaurant_id == ""
+
+    def test_create_with_restaurant_id(self):
+        session = OrderSession(restaurant_id="marios_pizzeria")
+        assert session.restaurant_id == "marios_pizzeria"
 
     def test_create_with_items(self):
         item = CartItem(

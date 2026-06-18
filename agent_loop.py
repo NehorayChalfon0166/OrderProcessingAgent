@@ -33,6 +33,7 @@ def process_turn(
     catalogue: Catalogue,
     pricing: PricingEngine,
     llm_client: LLMClient,
+    sessions_dir: str = "sessions",
 ) -> str:
     """Process one user message through the agent loop.
 
@@ -45,6 +46,8 @@ def process_turn(
         catalogue: Product catalogue.
         pricing: Pricing engine.
         llm_client: LLM API client.
+        sessions_dir: Directory for session persistence
+            (default ``"sessions"``).
 
     Returns:
         The assistant text response to display to the user.
@@ -74,7 +77,7 @@ def process_turn(
             # Model is responding to the customer — we're done
             content = text or "I've processed your request. Is there anything else?"
             session.add_assistant_message(content=content)
-            session.save()
+            session.save(sessions_dir)
             return content
 
         # Tool calls present — execute, then loop

@@ -11,7 +11,7 @@ from pricing import PricingEngine
 def pricing():
     """PricingEngine backed by the real menu.json."""
     from catalogue import Catalogue
-    catalogue = Catalogue("menu.json")
+    catalogue = Catalogue("menus/marios_pizzeria.json")
     return PricingEngine(catalogue.menu_data)
 
 

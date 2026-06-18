@@ -29,7 +29,8 @@ class AppConfig:
     llm_base_url: str = "https://api.deepseek.com"
 
     # Paths
-    menu_path: str = "menu.json"
+    menu_path: str = "menu.json"  # TODO: remove after multi-restaurant stable
+    restaurants_path: str = "restaurants.json"  # NEW — multi-restaurant config
     orders_dir: str = "orders"
     sessions_dir: str = "sessions"
 
@@ -55,6 +56,7 @@ class AppConfig:
             llm_model=os.getenv("LLM_MODEL", "deepseek-v4-flash"),
             llm_base_url=os.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
             menu_path=os.getenv("MENU_PATH", "menu.json"),
+            restaurants_path=os.getenv("RESTAURANTS_PATH", "restaurants.json"),
             orders_dir=os.getenv("ORDERS_DIR", "orders"),
             sessions_dir=os.getenv("SESSIONS_DIR", "sessions"),
             twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
