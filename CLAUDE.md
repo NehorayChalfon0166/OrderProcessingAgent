@@ -31,6 +31,7 @@ master: all core logic
 - `models.py`, `catalogue.py`, `pricing.py`, `tools.py`
 - `session.py`, `session_router.py` — session lifecycle and identity mapping
 - `agent_loop.py`, `prompts.py`, `llm_client.py`
+- `restaurant.py`, `restaurants.json` — multi-tenant restaurant registry
 - `config.py` — all env vars (channel fields allowed as dormant defaults)
 - `main.py` — CLI entry point only
 - `requirements.txt` — core dependencies only
@@ -67,8 +68,9 @@ master: all core logic
 - **Session = order, not person.** One session per order. Multiple orders
   from the same person are separate sessions. Terminal sessions (CANCELLED,
   COMPLETED) are dead and replaced on next contact.
-- **Session identity is a phone number.** Sanitized to digits. Used as both
-  the session filename and the lookup key.
+- **Session identity is (restaurant_id, phone_number).** Phone sanitized
+  to digits is the session_id; restaurant_id scopes the namespace
+  (subdirectory). Same phone can order from multiple restaurants.
 - **State machine:** BUILDING → REVIEW → PAYMENT_PENDING → COMPLETED
   (CANCELLED from any active state).
 - **LLM never sees raw tool results delivered to users.** Tool calls execute

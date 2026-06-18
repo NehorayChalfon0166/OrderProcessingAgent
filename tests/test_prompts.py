@@ -57,8 +57,8 @@ def test_build_prompt_state_reflected():
     assert "review" in prompt.lower()
 
 
-def test_prompt_length_under_500():
+def test_prompt_is_compact():
     """Prompt should be compact — no menu dump, no JSON schema."""
     session = OrderSession()
     prompt = build_system_prompt(session, "Mario's Pizzeria", "Pizzas: Margherita, Pepperoni, ...")
-    assert len(prompt) < 800  # behavioral rules add length, still compact
+    assert len(prompt) < 900  # behavioral rules + multilingual instruction, still compact
