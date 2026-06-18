@@ -24,6 +24,7 @@ from fastapi.responses import PlainTextResponse
 
 from agent_loop import process_turn
 from config import AppConfig
+from db import Database
 from llm_client import LLMClient
 from models import OrderType
 from restaurant import RestaurantContext, RestaurantRegistry
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 # ── Initialization ─────────────────────────────────────────────────────────────
 
 _registry: RestaurantRegistry | None = None
+_db: Database | None = None
 _llm: LLMClient | None = None
 _twilio: TwilioClient | None = None
 _router: SessionRouter | None = None
@@ -92,11 +94,12 @@ def _is_session_stale(session) -> bool:
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Load configuration and initialise all dependencies at startup."""
-    global _registry, _llm, _twilio, _router, _orders_dir
+    global _registry, _db, _llm, _twilio, _router, _orders_dir
 
     cfg = AppConfig.from_env()
 
     _registry = RestaurantRegistry(cfg.restaurants_path)
+    _db = Database(cfg.db_path)
     _llm = LLMClient(cfg)
     _twilio = TwilioClient(
         account_sid=cfg.twilio_account_sid,
@@ -142,6 +145,11 @@ def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
     filepath.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+    # Also save to database if available
+    if _db is not None:
+        _db.save_order(payload)
+
     logger.info("Order saved: %s", filepath)
 
 
@@ -202,7 +210,7 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
     assert _llm is not None
 
     # ── Process (offloaded to thread to avoid blocking the event loop) ──
-    session = _router.get_or_create(restaurant_ctx.config.id, wa_id)
+    session = _router.get_or_create(restaurant_ctx.config.id, wa_id, db=_db)
     sessions_dir = f"{_router.sessions_dir}/{restaurant_ctx.config.id}"
     lock_key = f"{restaurant_ctx.config.id}:{wa_id}"
     async with _get_lock(lock_key):

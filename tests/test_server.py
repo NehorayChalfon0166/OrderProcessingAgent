@@ -143,9 +143,9 @@ class TestReceiveMessage:
         )
 
         assert resp.status_code == 200
-        # get_or_create now takes (restaurant_id, phone_number)
+        # get_or_create now takes (restaurant_id, phone_number, db=...)
         mock_deps["router"].get_or_create.assert_called_once_with(
-            "marios_pizzeria", "972539534345"
+            "marios_pizzeria", "972539534345", db=mock.ANY
         )
         mock_deps["whatsapp"].send_whatsapp_message.assert_called_once()
 
