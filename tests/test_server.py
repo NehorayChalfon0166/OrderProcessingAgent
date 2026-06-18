@@ -7,17 +7,58 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_restaurant_ctx(rid="marios_pizzeria", name="Test Pizzeria"):
+    """Build a mock RestaurantContext with catalogue + pricing."""
+    mock_cat = mock.Mock()
+    mock_cat.restaurant_name = name
+    mock_cat.menu_data = {"restaurant_name": name, "products": [], "deals": []}
+    mock_cat.get_hints.return_value = {}
+
+    mock_prc = mock.Mock()
+    mock_prc.compute_totals.return_value = (20.0, 3.99, 23.99)
+
+    mock_config = mock.Mock()
+    mock_config.id = rid
+    mock_config.name = name
+
+    ctx = mock.Mock()
+    ctx.config = mock_config
+    ctx.catalogue = mock_cat
+    ctx.pricing = mock_prc
+    return ctx
+
+
+def _form_data(wa_id="972539534345", body="Hi", to="whatsapp:+14155238886"):
+    """Build a Twilio-like form-encoded body string.
+
+    The To number is URL-encoded so parse_qs decodes it correctly
+    (bare ``+`` is interpreted as a space in form-encoded data).
+    """
+    from urllib.parse import quote
+    to_encoded = quote(to, safe="")
+    return (
+        f"WaId={wa_id}&Body={body}&NumMedia=0"
+        f"&From=whatsapp%3A%2B{wa_id}"
+        f"&To={to_encoded}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
 @pytest.fixture
 def mock_deps():
     """Inject mock dependencies into the server module globals."""
     import server as srv
 
-    mock_cat = mock.Mock()
-    mock_cat.restaurant_name = "Test Pizzeria"
-    mock_cat.menu_data = {"restaurant_name": "Test Pizzeria", "products": [], "deals": []}
-    mock_cat.get_hints.return_value = {}
-
-    mock_prc = mock.Mock()
+    mock_reg = mock.Mock()
     mock_llm = mock.Mock()
     mock_wa = mock.Mock()
     mock_wa.auth_token = "test_token"
@@ -25,8 +66,7 @@ def mock_deps():
     mock_router.sessions_dir = "/tmp/test_sessions"
 
     orig = {
-        "_catalogue": srv._catalogue,
-        "_pricing": srv._pricing,
+        "_registry": srv._registry,
         "_llm": srv._llm,
         "_twilio": srv._twilio,
         "_router": srv._router,
@@ -35,8 +75,7 @@ def mock_deps():
         "_lock_access": dict(srv._lock_access),
     }
 
-    srv._catalogue = mock_cat
-    srv._pricing = mock_prc
+    srv._registry = mock_reg
     srv._llm = mock_llm
     srv._twilio = mock_wa
     srv._router = mock_router
@@ -44,11 +83,10 @@ def mock_deps():
     srv._locks.clear()
     srv._lock_access.clear()
 
-    yield {"catalogue": mock_cat, "pricing": mock_prc, "llm": mock_llm,
+    yield {"registry": mock_reg, "llm": mock_llm,
            "whatsapp": mock_wa, "router": mock_router}
 
-    srv._catalogue = orig["_catalogue"]
-    srv._pricing = orig["_pricing"]
+    srv._registry = orig["_registry"]
     srv._llm = orig["_llm"]
     srv._twilio = orig["_twilio"]
     srv._router = orig["_router"]
@@ -78,7 +116,7 @@ def client(mock_deps):
 class TestReceiveMessage:
     def test_ignores_non_text_messages(self, client, mock_deps):
         """Status updates and read receipts return empty TwiML."""
-        form_data = "WaId=972539534345&NumMedia=2&Body=pic"
+        form_data = "WaId=972539534345&NumMedia=2&Body=pic&To=whatsapp:+14155238886"
         resp = client.post(
             "/whatsapp/webhook",
             content=form_data,
@@ -91,38 +129,76 @@ class TestReceiveMessage:
         """A text message is processed through the agent loop."""
         from session import OrderSession
 
+        ctx = _make_restaurant_ctx("marios_pizzeria")
+        mock_deps["registry"].get_by_twilio_phone.return_value = ctx
+
         session = OrderSession()
         session.session_id = "972539534345"
         mock_deps["router"].get_or_create.return_value = session
 
-        form_data = "WaId=972539534345&Body=I+want+a+pizza&NumMedia=0&From=whatsapp"
         resp = client.post(
             "/whatsapp/webhook",
-            content=form_data,
+            content=_form_data(body="I want a pizza"),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
         assert resp.status_code == 200
-        mock_deps["router"].get_or_create.assert_called_once_with("972539534345")
+        # get_or_create now takes (restaurant_id, phone_number)
+        mock_deps["router"].get_or_create.assert_called_once_with(
+            "marios_pizzeria", "972539534345"
+        )
         mock_deps["whatsapp"].send_whatsapp_message.assert_called_once()
+
+    def test_unknown_restaurant_returns_500(self, client, mock_deps):
+        """Webhook with unrecognized To number returns 500."""
+        mock_deps["registry"].get_by_twilio_phone.return_value = None
+
+        resp = client.post(
+            "/whatsapp/webhook",
+            content=_form_data(to="whatsapp:+0000000000"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert resp.status_code == 500
 
     def test_agent_error_returns_fallback_message(self, client, mock_deps):
         """If process_turn blows up, respond with a fallback."""
         from session import OrderSession
 
+        ctx = _make_restaurant_ctx()
+        mock_deps["registry"].get_by_twilio_phone.return_value = ctx
+
         session = OrderSession()
         mock_deps["router"].get_or_create.return_value = session
 
         with mock.patch("server.process_turn", side_effect=RuntimeError("boom")):
-            form_data = "WaId=972539534345&Body=Hi&NumMedia=0&From=whatsapp"
             resp = client.post(
                 "/whatsapp/webhook",
-                content=form_data,
+                content=_form_data(body="Hi"),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
             assert resp.status_code == 200
             call_args = mock_deps["whatsapp"].send_whatsapp_message.call_args
             assert "sorry" in call_args[0][1].lower()
+
+    def test_routes_to_correct_restaurant_by_to_field(self, client, mock_deps):
+        """To field determines which restaurant context is used."""
+        from session import OrderSession
+
+        ctx = _make_restaurant_ctx("luigis")
+        mock_deps["registry"].get_by_twilio_phone.return_value = ctx
+
+        session = OrderSession()
+        mock_deps["router"].get_or_create.return_value = session
+
+        client.post(
+            "/whatsapp/webhook",
+            content=_form_data(to="whatsapp:+14151234567"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        mock_deps["registry"].get_by_twilio_phone.assert_called_once_with(
+            "+14151234567"
+        )
 
 
 # =============================================================================
@@ -131,39 +207,49 @@ class TestReceiveMessage:
 
 
 class TestSessionLocking:
-    def test_lock_created_per_phone(self, client, mock_deps):
-        """Each phone gets its own asyncio.Lock."""
+    def _setup_session(self, mock_deps, rid="marios_pizzeria"):
         from session import OrderSession
-        import server as srv
-
+        ctx = _make_restaurant_ctx(rid)
+        mock_deps["registry"].get_by_twilio_phone.return_value = ctx
         session = OrderSession()
         mock_deps["router"].get_or_create.return_value = session
+        return session
+
+    def test_lock_created_per_identity(self, client, mock_deps):
+        """Each (restaurant, phone) pair gets its own asyncio.Lock."""
+        import server as srv
+
+        self._setup_session(mock_deps)
 
         client.post(
             "/whatsapp/webhook",
-            content="WaId=972539534345&Body=A&NumMedia=0&From=whatsapp",
+            content=_form_data(),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
-        assert "972539534345" in srv._locks
-        assert isinstance(srv._locks["972539534345"], asyncio.Lock)
+        lock_key = "marios_pizzeria:972539534345"
+        assert lock_key in srv._locks
+        assert isinstance(srv._locks[lock_key], asyncio.Lock)
 
-    def test_different_phones_get_different_locks(self, client, mock_deps):
-        """Phone A and phone B do not share a lock."""
-        from session import OrderSession
+    def test_different_restaurants_get_different_locks(self, client, mock_deps):
+        """Same phone, different restaurant → different locks."""
         import server as srv
 
-        session = OrderSession()
-        mock_deps["router"].get_or_create.return_value = session
+        self._setup_session(mock_deps, rid="marios")
+        client.post(
+            "/whatsapp/webhook",
+            content=_form_data(wa_id="972539534345", to="whatsapp:+1111111111"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
 
-        for phone in ("972539534345", "972539876543"):
-            client.post(
-                "/whatsapp/webhook",
-                content=f"WaId={phone}&Body=Hi&NumMedia=0&From=whatsapp",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
+        self._setup_session(mock_deps, rid="luigis")
+        client.post(
+            "/whatsapp/webhook",
+            content=_form_data(wa_id="972539534345", to="whatsapp:+2222222222"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
 
-        assert srv._locks["972539534345"] is not srv._locks["972539876543"]
+        assert srv._locks["marios:972539534345"] is not srv._locks["luigis:972539534345"]
 
 
 # =============================================================================
@@ -187,6 +273,11 @@ class TestStaleSession:
         assert _is_session_stale(s)
 
 
+# =============================================================================
+# Signature Validation
+# =============================================================================
+
+
 class TestSignatureValidation:
     def test_returns_500_when_twilio_not_initialised(self, mock_deps):
         import server as srv
@@ -195,9 +286,9 @@ class TestSignatureValidation:
             __import__("twilio_client").TwilioClient,
             "validate_webhook", return_value=True,
         ):
-            from fastapi.testclient import TestClient
-            client = TestClient(srv.app)
-            form_data = "WaId=972539534345&Body=Hi&NumMedia=0&From=whatsapp"
+            from fastapi.testclient import TestClient as TC
+            client = TC(srv.app)
+            form_data = _form_data()
             resp = client.post(
                 "/whatsapp/webhook", content=form_data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -229,13 +320,15 @@ class TestLockEviction:
 class TestEventLoopOffloading:
     def test_process_turn_runs_in_thread(self, client, mock_deps):
         from session import OrderSession
+        ctx = _make_restaurant_ctx()
+        mock_deps["registry"].get_by_twilio_phone.return_value = ctx
         session = OrderSession()
         mock_deps["router"].get_or_create.return_value = session
         with mock.patch("server.asyncio.to_thread") as mock_tt:
             mock_tt.return_value = "Thanks!"
-            form_data = "WaId=972539534345&Body=Hi&NumMedia=0&From=whatsapp"
             client.post(
-                "/whatsapp/webhook", content=form_data,
+                "/whatsapp/webhook",
+                content=_form_data(),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
             assert mock_tt.called

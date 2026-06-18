@@ -23,11 +23,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from agent_loop import process_turn
-from catalogue import Catalogue
 from config import AppConfig
 from llm_client import LLMClient
 from models import OrderType
-from pricing import PricingEngine
+from restaurant import RestaurantContext, RestaurantRegistry
 from session_router import SessionRouter
 from twilio_client import TwilioClient
 
@@ -35,14 +34,13 @@ logger = logging.getLogger(__name__)
 
 # ── Initialization ─────────────────────────────────────────────────────────────
 
-_catalogue: Catalogue | None = None
-_pricing: PricingEngine | None = None
+_registry: RestaurantRegistry | None = None
 _llm: LLMClient | None = None
 _twilio: TwilioClient | None = None
 _router: SessionRouter | None = None
 _orders_dir: str = "orders"
 _locks: dict[str, asyncio.Lock] = {}
-_lock_access: dict[str, float] = {}  # phone → monotonic timestamp
+_lock_access: dict[str, float] = {}  # identity → monotonic timestamp
 
 # Empty TwiML — we reply asynchronously via REST
 _EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
@@ -94,12 +92,11 @@ def _is_session_stale(session) -> bool:
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Load configuration and initialise all dependencies at startup."""
-    global _catalogue, _pricing, _llm, _twilio, _router, _orders_dir
+    global _registry, _llm, _twilio, _router, _orders_dir
 
     cfg = AppConfig.from_env()
 
-    _catalogue = Catalogue(cfg.menu_path)
-    _pricing = PricingEngine(_catalogue.menu_data)
+    _registry = RestaurantRegistry(cfg.restaurants_path)
     _llm = LLMClient(cfg)
     _twilio = TwilioClient(
         account_sid=cfg.twilio_account_sid,
@@ -109,22 +106,25 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _router = SessionRouter(cfg.sessions_dir)
     _orders_dir = cfg.orders_dir
 
-    logger.info("Twilio server started — menu loaded, WhatsApp sandbox ready")
+    logger.info(
+        "Twilio server started — %d restaurant(s) loaded",
+        len(_registry.list_restaurants()),
+    )
     yield
     logger.info("Server shutting down")
 
 
-def _save_order_file(session) -> None:
-    """Persist a completed order to the orders directory."""
-    assert _catalogue is not None
-    assert _pricing is not None
-
+def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
+    """Persist a completed order to the restaurant-scoped orders directory."""
     ot = session.customer.order_type or OrderType.PICKUP
-    subtotal, delivery_fee, total = _pricing.compute_totals(session.cart, ot)
+    subtotal, delivery_fee, total = restaurant_ctx.pricing.compute_totals(
+        session.cart, ot
+    )
 
     payload = {
         "order_id": session.session_id,
-        "restaurant": _catalogue.restaurant_name,
+        "restaurant_id": session.restaurant_id,
+        "restaurant": restaurant_ctx.config.name,
         "items": [item.model_dump() for item in session.cart],
         "customer": session.customer.model_dump(),
         "subtotal": subtotal,
@@ -134,10 +134,11 @@ def _save_order_file(session) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    Path(_orders_dir).mkdir(parents=True, exist_ok=True)
+    order_dir = Path(_orders_dir) / session.restaurant_id
+    order_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"order_{session.session_id}_{ts}.json"
-    filepath = Path(_orders_dir) / filename
+    filename = f"{session.session_id}_{ts}.json"
+    filepath = order_dir / filename
     filepath.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -187,15 +188,24 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
     wa_id, text = extracted
     logger.info("WhatsApp from %s: %s", wa_id[:6], text[:100])
 
+    # ── Route to restaurant by To number ──────────────────────────────────
+    to_raw = flat_params.get("To", "")           # e.g. "whatsapp:+14155238886"
+    to_clean = to_raw.removeprefix("whatsapp:")   # "+14155238886"
+    restaurant_ctx = _registry.get_by_twilio_phone(to_clean)
+    if restaurant_ctx is None:
+        logger.error("No restaurant configured for To=%s", to_raw)
+        raise HTTPException(status_code=500, detail="Unknown restaurant")
+
     assert _twilio is not None
     assert _router is not None
-    assert _catalogue is not None
-    assert _pricing is not None
+    assert _registry is not None
     assert _llm is not None
 
     # ── Process (offloaded to thread to avoid blocking the event loop) ──
-    session = _router.get_or_create(wa_id)
-    async with _get_lock(wa_id):
+    session = _router.get_or_create(restaurant_ctx.config.id, wa_id)
+    sessions_dir = f"{_router.sessions_dir}/{restaurant_ctx.config.id}"
+    lock_key = f"{restaurant_ctx.config.id}:{wa_id}"
+    async with _get_lock(lock_key):
         try:
             if _is_session_stale(session):
                 text = (
@@ -205,11 +215,14 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                 )
 
             response = await asyncio.to_thread(
-                process_turn, session, text, _catalogue, _pricing, _llm
+                process_turn,
+                session, text,
+                restaurant_ctx.catalogue, restaurant_ctx.pricing, _llm,
+                sessions_dir=sessions_dir,
             )
-            session.save(_router.sessions_dir)
+            session.save(sessions_dir)
             if session.is_complete:
-                _save_order_file(session)
+                _save_order_file(session, restaurant_ctx)
         except Exception as e:
             logger.error("process_turn failed for %s: %s", wa_id[:6], e)
             response = (
