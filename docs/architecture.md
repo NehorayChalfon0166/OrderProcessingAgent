@@ -79,6 +79,5 @@ See `docs/payment_architecture.md`.
 | Doc | Purpose |
 |---|---|
 | [decorator.md](decorator.md) | `@tool` decorator design |
-| [build_order.md](build_order.md) | Dependency-ordered implementation sequence |
 | [testing.md](testing.md) | Testing strategy |
 | [payment_architecture.md](payment_architecture.md) | Payment flow design |

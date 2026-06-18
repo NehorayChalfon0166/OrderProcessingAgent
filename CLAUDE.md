@@ -7,6 +7,9 @@
 - **Plans go in docs/.** When I say "write a plan," I mean a markdown file
   in `docs/`. Not the internal Claude plan file. If you are in plan mode
   and need to write files outside docs/, ask me to exit plan mode first.
+- **Clean up plan docs after implementation.** Once a plan is fully
+  implemented, delete it or merge it into the relevant component doc.
+  Don't leave stale implementation plans in `docs/`.
 - **No execution without approval.** Do not write code, commit, or make
   changes unless I explicitly tell you to. When I say "let's talk about X,"
   I mean talk — not plan, not implement.
