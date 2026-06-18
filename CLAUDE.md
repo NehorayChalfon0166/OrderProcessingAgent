@@ -86,50 +86,56 @@ master: all core logic
 - **LLM never sees raw tool results delivered to users.** Tool calls execute
   silently, then the LLM responds naturally.
 
-## Pre-commit verification
+## Commit workflow
 
-Before committing on any branch, run these checks. Do not skip any.
+Every commit is gated by TWO independent layers. Both must pass. Neither
+can be skipped (Claude Code blocks the Bash call before git even sees it).
 
-1. **Test suite:**
-   ```bash
-   python -m pytest tests/ -q
-   ```
-   Every test must pass. If you changed a function signature, update the
-   callers in tests too.
+### Layer 1 — Mechanical checks (git pre-commit hook)
 
-2. **Integration tests:**
-   ```bash
-   python tests/test_integration.py
-   ```
-   These test full call chains with real file I/O — they catch what unit
-   tests miss (missing variables, broken imports, wrong subdirectories).
+Located at `.githooks/pre-commit`. Runs automatically via `core.hooksPath`:
 
-3. **Live smoke test — CLI entry point:**
-   ```python
-   from unittest import mock; import sys, io
-   with mock.patch('main.process_turn', return_value='Welcome!'):
-       from config import AppConfig; from main import run_session
-       sys.stdin = io.StringIO('quit\n')
-       run_session(AppConfig.from_env())
-   ```
-   This catches `NameError`, `ImportError`, and `AttributeError` in the
-   full `run_session` call chain. If you added parameters to
-   `process_turn`, changed `OrderSession` fields, or modified imports in
-   `main.py`, this must not crash.
+- Test suite: `python -m pytest tests/ -q` (auto-discovers all tests)
+- Integration tests: `python tests/test_integration.py`
+- Live smoke test: CLI entry point with mocked LLM
+- Branch rules: `*-integration` branches cannot modify master files
 
-4. **Live smoke test — `--list-restaurants`:**
-   ```bash
-   python main.py --list-restaurants
-   ```
-   Verifies the argument parser and `RestaurantRegistry` load correctly.
+If any fail, git blocks the commit.
 
-5. **Dead code check:**
-   - Search for unused imports in every file you touched.
-   - Search for references to removed fields/functions.
-   - Check that docstrings and error messages don't reference deleted files
-     (like the old `menu.json`).
+### Layer 2 — Manual review gate (Claude Code PreToolUse hook)
 
-6. **Docs check:** If you added a feature, changed a workflow, or modified
-   configuration, update the relevant docs in `docs/` and `README.md`.
-   Delete stale docs. Per the rule above: plans are deleted or converted
-   to operational docs after implementation.
+Located at `.claude/hooks/commit-guard.sh`. Triggered by `settings.json`
+`PreToolUse` on `Bash(git commit*)`. This fires BEFORE the Bash tool runs,
+so it cannot be bypassed (even `--no-verify` won't help — Claude Code
+intercepts the command before git).
+
+The guard blocks ALL `git commit` attempts unless `.review-approved`
+exists. This file is created by the AI agent only after:
+
+1. Mechanical checks pass
+2. Manual review complete:
+   - Dead code: unused imports, references to removed fields/files
+   - Docs: README.md, docs/ up to date? Stale docs deleted?
+   - Test gaps: did any bug escape? Add a test that would have caught it
+   - Consistency: timestamps, file paths, naming match across files?
+3. **Findings reported to user**
+4. **User explicitly approves**
+
+### Commit sequence
+
+```
+1. AI stages changes, attempts git commit
+2. Claude Code PreToolUse hook → .review-approved? → NO → BLOCKED
+3. AI does manual review, reports to user
+4. User approves → AI runs: echo approved > .review-approved
+5. AI retries git commit
+6. Claude Code PreToolUse hook → .review-approved exists → allow
+7. Git pre-commit hook → tests, integration, smoke → pass → commit succeeds
+```
+
+### After commit
+
+- `.review-approved` is auto-deleted by the Claude Code hook
+- Docs cleanup happens in a follow-up commit if needed
+- The next commit starts fresh — no stale approval file
+

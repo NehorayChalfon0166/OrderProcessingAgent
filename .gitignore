@@ -4,3 +4,4 @@ __pycache__/
 orders/
 .pytest_cache/
 sessions/
+.review-approved
