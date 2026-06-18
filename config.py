@@ -30,6 +30,7 @@ class AppConfig:
 
     # Paths
     restaurants_path: str = "restaurants.json"
+    db_path: str = "order_agent.db"
     orders_dir: str = "orders"
     sessions_dir: str = "sessions"
 
@@ -55,6 +56,7 @@ class AppConfig:
             llm_model=os.getenv("LLM_MODEL", "deepseek-v4-flash"),
             llm_base_url=os.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
             restaurants_path=os.getenv("RESTAURANTS_PATH", "restaurants.json"),
+            db_path=os.getenv("DB_PATH", "order_agent.db"),
             orders_dir=os.getenv("ORDERS_DIR", "orders"),
             sessions_dir=os.getenv("SESSIONS_DIR", "sessions"),
             twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),

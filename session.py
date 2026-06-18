@@ -1,8 +1,9 @@
-"""Order session — holds mutable order state and handles JSON persistence.
+"""Order session — holds mutable order state and handles persistence.
 
 The session is a Pydantic model that stores everything about an active
 order: cart items, customer info, conversation history, and state machine
-position. It is persisted to sessions/{session_id}.json after every turn.
+position. Persists to SQLite when a Database instance is attached, or
+falls back to JSON files.
 """
 
 from __future__ import annotations
@@ -10,10 +11,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, PrivateAttr
 
 from models import CartItem, CustomerInfo, Message, MessageRole, OrderState
+
+if TYPE_CHECKING:
+    from db import Database
 
 
 class OrderSession(BaseModel):
@@ -63,6 +68,10 @@ class OrderSession(BaseModel):
     # Internal signal — set by tools, read and cleared by agent loop.
     # Excluded from serialization and never seen by the LLM.
     _pending_transition: OrderState | None = PrivateAttr(default=None)
+
+    # Database handle — set by SessionRouter or caller. When present,
+    # save() delegates to the database instead of writing JSON files.
+    _db: Database | None = PrivateAttr(default=None)
 
     # ------------------------------------------------------------------
     # Properties
@@ -126,11 +135,18 @@ class OrderSession(BaseModel):
     # ------------------------------------------------------------------
 
     def save(self, sessions_dir: str = "sessions") -> Path:
-        """Write session state to a JSON file.
+        """Persist session state.
 
-        Creates the sessions directory if it doesn't exist.
+        Uses the attached Database if available, otherwise falls back to
+        writing a JSON file to *sessions_dir*.
         """
         self.updated_at = datetime.now(tz=timezone.utc).isoformat()
+
+        if self._db is not None:
+            self._db.save_session(self)
+            return Path()  # no file path when DB-backed
+
+        # JSON fallback
         dir_path = Path(sessions_dir)
         dir_path.mkdir(parents=True, exist_ok=True)
         filepath = dir_path / f"{self.session_id}.json"

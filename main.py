@@ -20,6 +20,7 @@ from pathlib import Path
 
 from agent_loop import process_turn
 from config import AppConfig
+from db import Database
 from llm_client import LLMClient
 from models import OrderType
 from restaurant import RestaurantRegistry
@@ -154,10 +155,12 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
     catalogue = ctx.catalogue
     pricing = ctx.pricing
     llm_client = LLMClient(config)
+    db = Database(config.db_path)
     sessions_dir = f"{config.sessions_dir}/{ctx.config.id}"
 
     # Create session
     session = OrderSession(restaurant_id=ctx.config.id)
+    session._db = db  # type: ignore[has-type]
     logger.info("New session: %s (restaurant: %s)", session.session_id, ctx.config.id)
 
     # Generate greeting
@@ -201,6 +204,7 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
         if user_input.lower() == "restart":
             print_system("Starting a new order...")
             session = OrderSession(restaurant_id=ctx.config.id)
+            session._db = db  # type: ignore[has-type]
             try:
                 greeting = process_turn(
                     session, "Hi", catalogue, pricing, llm_client,
