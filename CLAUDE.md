@@ -18,6 +18,16 @@
 - **Do not overfit tests.** Tests should verify behavior, not mirror
   implementation. If a test fails because the implementation changed
   legitimately, fix the test.
+- **Tests are not enough.** The unit test suite mocks at the function level
+  and cannot catch missing variable assignments, broken import chains, or
+  undefined functions. After any change that touches function signatures,
+  imports, or the call chain, run live verification: mock the LLM, call
+  the actual entry points, and make sure they don't crash.
+- **When a bug escapes the tests, add a test that would have caught it.**
+  Don't just fix the bug and move on. Ask why the tests didn't catch it
+  and close the gap. The integration test suite (`tests/test_integration.py`)
+  exists specifically to catch issues that unit tests miss — use it and
+  extend it.
 
 ## Branching strategy
 
@@ -75,3 +85,51 @@ master: all core logic
   (CANCELLED from any active state).
 - **LLM never sees raw tool results delivered to users.** Tool calls execute
   silently, then the LLM responds naturally.
+
+## Pre-commit verification
+
+Before committing on any branch, run these checks. Do not skip any.
+
+1. **Test suite:**
+   ```bash
+   python -m pytest tests/ -q
+   ```
+   Every test must pass. If you changed a function signature, update the
+   callers in tests too.
+
+2. **Integration tests:**
+   ```bash
+   python tests/test_integration.py
+   ```
+   These test full call chains with real file I/O — they catch what unit
+   tests miss (missing variables, broken imports, wrong subdirectories).
+
+3. **Live smoke test — CLI entry point:**
+   ```python
+   from unittest import mock; import sys, io
+   with mock.patch('main.process_turn', return_value='Welcome!'):
+       from config import AppConfig; from main import run_session
+       sys.stdin = io.StringIO('quit\n')
+       run_session(AppConfig.from_env())
+   ```
+   This catches `NameError`, `ImportError`, and `AttributeError` in the
+   full `run_session` call chain. If you added parameters to
+   `process_turn`, changed `OrderSession` fields, or modified imports in
+   `main.py`, this must not crash.
+
+4. **Live smoke test — `--list-restaurants`:**
+   ```bash
+   python main.py --list-restaurants
+   ```
+   Verifies the argument parser and `RestaurantRegistry` load correctly.
+
+5. **Dead code check:**
+   - Search for unused imports in every file you touched.
+   - Search for references to removed fields/functions.
+   - Check that docstrings and error messages don't reference deleted files
+     (like the old `menu.json`).
+
+6. **Docs check:** If you added a feature, changed a workflow, or modified
+   configuration, update the relevant docs in `docs/` and `README.md`.
+   Delete stale docs. Per the rule above: plans are deleted or converted
+   to operational docs after implementation.
