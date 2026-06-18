@@ -155,6 +155,56 @@ def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
     logger.info("Order saved: %s", filepath)
 
 
+def _notify_restaurant(session, restaurant_ctx: RestaurantContext) -> None:
+    """Send a WhatsApp notification to the restaurant about a new order."""
+    restaurant_phone = restaurant_ctx.config.twilio_phone.removeprefix("+")
+    items_text = "\n".join(
+        f"  {i.quantity}x {i.name}"
+        + (f" ({i.size})" if i.size else "")
+        + (f" + {', '.join(t.name for t in i.toppings)}" if i.toppings else "")
+        for i in session.cart
+    )
+    ot = session.customer.order_type.value if session.customer.order_type else "pickup"
+    name = session.customer.name or "N/A"
+    phone = session.customer.phone or "N/A"
+    address = session.customer.address or ""
+
+    message = (
+        f"🔔 New Order!\n"
+        f"Order #{session.session_id}\n"
+        f"Customer: {name} ({phone})\n"
+        f"Type: {ot}"
+    )
+    if address:
+        message += f"\nAddress: {address}"
+
+    # Compute total
+    pricing = restaurant_ctx.pricing
+    _, _, total = pricing.compute_totals(
+        session.cart,
+        session.customer.order_type or OrderType.PICKUP,
+    )
+
+    message += (
+        f"\n{'─' * 20}\n"
+        f"{items_text}\n"
+        f"{'─' * 20}\n"
+        f"Total: ₪{total:.2f}"
+    )
+
+    try:
+        _twilio.send_whatsapp_message(restaurant_phone, message)
+        logger.info(
+            "Restaurant notified for order %s/%s",
+            restaurant_ctx.config.id, session.session_id,
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to notify restaurant %s: %s",
+            restaurant_ctx.config.id, e,
+        )
+
+
 app = FastAPI(title="Order Processing Agent — Twilio", lifespan=_lifespan)
 
 # ── WhatsApp Webhook ───────────────────────────────────────────────────────────
@@ -248,6 +298,8 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
 
             if session.is_complete:
                 _save_order_file(session, restaurant_ctx)
+                # Notify restaurant via WhatsApp
+                _notify_restaurant(session, restaurant_ctx)
         except Exception as e:
             logger.error("process_turn failed for %s: %s", wa_id[:6], e)
             response = (
