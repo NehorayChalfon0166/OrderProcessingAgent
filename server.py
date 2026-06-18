@@ -26,7 +26,8 @@ from agent_loop import process_turn
 from config import AppConfig
 from db import Database
 from llm_client import LLMClient
-from models import OrderType
+from models import OrderState, OrderType
+from payment import create_checkout_session, verify_webhook
 from restaurant import RestaurantContext, RestaurantRegistry
 from session_router import SessionRouter
 from twilio_client import TwilioClient
@@ -229,6 +230,21 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                 sessions_dir=sessions_dir,
             )
             session.save(sessions_dir)
+
+            # Payment link generation — if PAYMENT_PENDING, create Stripe URL
+            if session.state == OrderState.PAYMENT_PENDING:
+                payment_url = create_checkout_session(
+                    session_id=session.session_id,
+                    restaurant_id=restaurant_ctx.config.id,
+                    restaurant_name=restaurant_ctx.config.name,
+                    items=[item.model_dump() for item in session.cart],
+                    total=restaurant_ctx.pricing.compute_totals(
+                        session.cart,
+                        session.customer.order_type or OrderType.PICKUP,
+                    )[2],
+                )
+                response = f"Pay here to confirm your order: {payment_url}"
+
             if session.is_complete:
                 _save_order_file(session, restaurant_ctx)
         except Exception as e:
@@ -251,3 +267,52 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
 
     _sweep_stale_locks()
     return PlainTextResponse(_EMPTY_TWIML, media_type="application/xml")
+
+
+# ── Payment Webhook ────────────────────────────────────────────────────────────
+
+
+@app.post("/payment/webhook")
+async def receive_payment(request: Request):
+    """Receive Stripe webhook events — payment completion."""
+    payload = await request.body()
+    sig_header = request.headers.get("Stripe-Signature", "")
+
+    try:
+        event = verify_webhook(payload, sig_header)
+    except Exception:
+        logger.warning("Invalid Stripe webhook signature")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    if event.get("type") != "checkout.session.completed":
+        return {"status": "ignored"}
+
+    # Extract session identity from metadata
+    obj = event.get("data", {}).get("object", {})
+    metadata = obj.get("metadata", {})
+    restaurant_id = metadata.get("restaurant_id", "")
+    session_id = metadata.get("session_id", "")
+
+    if not restaurant_id or not session_id:
+        logger.error("Stripe webhook missing metadata: %s", metadata)
+        raise HTTPException(status_code=400, detail="Missing order metadata")
+
+    # Load session and complete
+    session = _router.get_or_create(restaurant_id, session_id, db=_db)
+    if session.state == OrderState.COMPLETED:
+        return {"status": "already_completed"}  # idempotent
+
+    session.state = OrderState.COMPLETED
+    session.save()
+
+    # Send confirmation via WhatsApp
+    await asyncio.to_thread(
+        _twilio.send_whatsapp_message,
+        session.session_id,
+        "Payment received! Your order is confirmed.",
+    )
+
+    logger.info(
+        "Payment completed for %s/%s", restaurant_id, session_id,
+    )
+    return {"status": "ok"}
