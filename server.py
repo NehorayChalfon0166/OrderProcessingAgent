@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time as _time_module
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -315,4 +316,43 @@ async def receive_payment(request: Request):
     logger.info(
         "Payment completed for %s/%s", restaurant_id, session_id,
     )
+    return {"status": "ok"}
+
+
+# ── Printer Agent API ──────────────────────────────────────────────────────────
+
+
+def _check_printer_token(token: str) -> bool:
+    """Validate the printer agent API token."""
+    expected = os.environ.get("API_TOKEN", "")
+    return bool(expected) and token == expected
+
+
+@app.get("/api/orders")
+async def get_unprinted_orders(request: Request):
+    """Return unprinted orders for a restaurant. Used by the printer agent."""
+    restaurant_id = request.query_params.get("restaurant_id", "")
+    token = request.query_params.get("token", "")
+
+    if not _check_printer_token(token):
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    if _db is None:
+        return {"orders": []}
+
+    orders = _db.get_unprinted_orders(restaurant_id)
+    return {"orders": orders}
+
+
+@app.post("/api/orders/{order_id}/printed")
+async def mark_order_printed(order_id: str, request: Request):
+    """Mark an order as printed. Used by the printer agent after printing."""
+    token = request.query_params.get("token", "")
+
+    if not _check_printer_token(token):
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    if _db is not None:
+        _db.mark_printed(order_id)
+
     return {"status": "ok"}
