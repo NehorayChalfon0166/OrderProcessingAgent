@@ -663,9 +663,9 @@ No code — the schema doc is on master under `docs/menu_schema.md`.
 
 ## 6. Menu Management + Error Recovery
 
-**Status:** Fully designed
+**Status:** Error recovery done, menu management pending
 
-### Menu Management
+### Menu Management (pending)
 
 Restaurant owners update their menu via WhatsApp. The LLM interprets
 intent and calls a `manage_menu` tool:
@@ -685,67 +685,26 @@ server picks up changes automatically.
 Menu JSON files are simple structures — the tool can modify them directly
 without database involvement.
 
-### Error Recovery
+Depends on the new menu schema (`docs/menu_schema.md`) — the `available`
+field on items/variants/addons is the toggle mechanism.
 
-Three layers of protection against the system losing or corrupting orders.
+### Error Recovery (done — see [docs/error_recovery.md](error_recovery.md))
 
-**LLM failures (transient):**
+Three layers, all implemented on master.
 
-`process_turn` gets retry logic around the LLM call:
+**LLM retry:** `LLMClient.chat()` retries transient failures (connection,
+timeout, 429, 503) with 1s/3s/9s backoff. Permanent errors (400, 401, 403)
+propagate immediately. Implemented in `llm_client.py`.
 
-```python
-for attempt in range(3):
-    try:
-        text, tool_calls = llm_client.chat(full_msgs, tool_defs)
-        break
-    except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
-        if attempt < 2 and _is_retryable(e):
-            time.sleep(backoff[attempt])  # 1s, 3s, 9s
-            continue
-        raise
-```
+**Twilio send failures:** Already handled by existing architecture —
+`session.save()` runs before the Twilio send, so the response is in the
+conversation history. If the customer messages again, the LLM sees the
+unsent response and re-delivers it. No code changes needed.
 
-Transient: timeout, 503, 429. Permanent: 401, 403, 400 → no retry.
-
-Session is saved before the LLM call (see atomicity below), so a retry
-continues from the same state.
-
-**Twilio send failures:**
-
-If `send_whatsapp_message()` fails, the session stays in its current
-state. The response text is saved on the session. On the customer's
-next message, `process_turn` detects the unsent response and sends it
-first before processing the new message.
-
-No background queue, no complex retry infrastructure. Customer messaging
-again naturally triggers the re-send.
-
-**Tool execution atomicity (mid-call crashes):**
-
-If any tool in a batch crashes, the entire turn's changes are rolled
-back via database reload:
-
-```python
-# agent_loop.py — before executing tool batch
-session.save(sessions_dir)  # snapshot
-
-try:
-    for tc in tool_calls[:5]:
-        _execute_tool(session, catalogue, pricing, tc, tool_funcs)
-    _apply_transition(session)
-except Exception:
-    # Reload clean state from DB — discards all mutations from this turn
-    session = OrderSession.load(
-        session.restaurant_id, session.session_id,
-        sessions_dir=sessions_dir, db=db
-    )
-    raise
-```
-
-One extra save per turn creates the snapshot (~1ms in SQLite WAL). The
-database guarantees the reload is complete — cart, state, customer,
-conversation all roll back to the snapshot point. No shallow-copy bugs,
-no partial state.
+**Tool atomicity:** A session snapshot is saved before each tool batch.
+If a catastrophic error escapes the per-tool try/except, the session
+rolls back to the snapshot and the LLM retries the turn. Implemented in
+`agent_loop.py` via `_restore_session_from_snapshot()`.
 
 ### Branch
 

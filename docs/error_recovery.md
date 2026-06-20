@@ -1,10 +1,8 @@
-# Error Recovery — Implementation Plan
+# Error Recovery
 
-Component 6 of the production roadmap — three layers of protection against
-transient failures.
+Status: **SETTLED**
 
-Branch: `feature/error-recovery` from `master`. After merge, rebase
-`twilio-integration`.
+Three layers of protection against transient failures in the agent loop.
 
 ---
 
