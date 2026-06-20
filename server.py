@@ -350,6 +350,12 @@ async def receive_payment(request: Request):
         logger.error("Stripe webhook missing metadata: %s", metadata)
         raise HTTPException(status_code=400, detail="Missing order metadata")
 
+    # Load restaurant context for order saving and notification
+    restaurant_ctx = _registry.get_by_id(restaurant_id)
+    if restaurant_ctx is None:
+        logger.error("Unknown restaurant in Stripe webhook: %s", restaurant_id)
+        raise HTTPException(status_code=400, detail="Unknown restaurant")
+
     # Load session and complete
     session = _router.get_or_create(restaurant_id, session_id, db=_db)
     if session.state == OrderState.COMPLETED:
@@ -357,6 +363,10 @@ async def receive_payment(request: Request):
 
     session.state = OrderState.COMPLETED
     session.save()
+
+    # Persist order and notify restaurant (same as WhatsApp cash flow)
+    _save_order_file(session, restaurant_ctx)
+    _notify_restaurant(session, restaurant_ctx)
 
     # Send confirmation via WhatsApp
     await asyncio.to_thread(
