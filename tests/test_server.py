@@ -25,6 +25,7 @@ def _make_restaurant_ctx(rid="marios_pizzeria", name="Test Pizzeria"):
     mock_config = mock.Mock()
     mock_config.id = rid
     mock_config.name = name
+    mock_config.owner_phone = "+15551234567"
 
     ctx = mock.Mock()
     ctx.config = mock_config

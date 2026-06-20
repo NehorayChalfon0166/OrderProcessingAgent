@@ -157,7 +157,7 @@ def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
 
 def _notify_restaurant(session, restaurant_ctx: RestaurantContext) -> None:
     """Send a WhatsApp notification to the restaurant about a new order."""
-    restaurant_phone = restaurant_ctx.config.twilio_phone.removeprefix("+")
+    restaurant_phone = restaurant_ctx.config.owner_phone.removeprefix("+")
     items_text = "\n".join(
         f"  {i.quantity}x {i.name}"
         + (f" ({i.size})" if i.size else "")
