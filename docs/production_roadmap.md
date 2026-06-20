@@ -663,30 +663,7 @@ No code — the schema doc is on master under `docs/menu_schema.md`.
 
 ## 6. Menu Management + Error Recovery
 
-**Status:** Error recovery done, menu management pending
-
-### Menu Management (pending)
-
-Restaurant owners update their menu via WhatsApp. The LLM interprets
-intent and calls a `manage_menu` tool:
-
-| Command | Intent → Tool Call |
-|---|---|
-| "/86 Margherita" | `manage_menu(action="out_of_stock", item="Margherita")` |
-| "Pepperoni is sold out today" | Same — natural language |
-| "/price Pepperoni large 60" | `manage_menu(action="set_price", item="Pepperoni", size="large", price=60)` |
-| "Add a new side: French Fries ₪18" | `manage_menu(action="add_item", category="Sides", name="French Fries", price=18)` |
-| "Margherita is back" | `manage_menu(action="in_stock", item="Margherita")` |
-
-The `manage_menu` tool updates the in-memory `Catalogue` (marks items
-unavailable) and persists changes to the menu JSON file. Reloading the
-server picks up changes automatically.
-
-Menu JSON files are simple structures — the tool can modify them directly
-without database involvement.
-
-Depends on the new menu schema (`docs/menu_schema.md`) — the `available`
-field on items/variants/addons is the toggle mechanism.
+**Status:** Error recovery done, menu management deferred
 
 ### Error Recovery (done — see [docs/error_recovery.md](error_recovery.md))
 
@@ -706,7 +683,58 @@ If a catastrophic error escapes the per-tool try/except, the session
 rolls back to the snapshot and the LLM retries the turn. Implemented in
 `agent_loop.py` via `_restore_session_from_snapshot()`.
 
+### Menu Management (deferred)
+
+**Decision:** Deferred until there is real usage data from at least one
+live restaurant. We don't know yet whether menu changes are a daily event
+(a tool pays for itself) or a monthly event (editing JSON by hand is fine).
+
+In the meantime, manual menu edits are straightforward:
+- Toggle `"available": false` on the relevant item/variant/addon
+- Edit `"price"` if a price changes
+- Restart the server to reload
+
+#### Planned Design (for future implementation)
+
+A `manage_menu` CLI command backed by a Python tool function. Same LLM
+parsing pattern used for manual onboarding: you type what you want in
+natural language, the LLM determines the action and parameters, Python
+validates and executes.
+
+```
+python main.py manage-menu --restaurant marios_pizzeria \
+    "86 the Margherita, also Pepperoni large is now 70"
+```
+
+The tool function validates every action before writing:
+
+| Action | Parameters | Validation |
+|---|---|---|
+| `out_of_stock` | item_id | Item exists, is currently available |
+| `in_stock` | item_id, variant_id? | Item exists, is currently unavailable |
+| `set_price` | item_id, variant_id?, new_price | Item/variant exists, price > 0 |
+| `add_item` | category_id, name, price/variants | Category exists, no duplicate ID |
+| `remove_item` | item_id | Item exists |
+
+All actions in a single command are transactional — either all succeed
+or none are applied. The tool writes the JSON file atomically (write to
+temp file, rename, reload catalogue in process).
+
+**Why not WhatsApp?** For the owner to send menu commands via WhatsApp,
+the system needs to know who is the owner vs. a customer. The restaurant's
+Twilio number is the one customers message — the owner would be using
+their personal phone, which the system has no way to identify as "the
+owner." Solutions exist (a `/` command prefix, a separate WhatsApp number,
+an `owner_phone` field in `restaurants.json`) but they add complexity
+that's not justified until we know the rate of menu changes.
+
+**Prerequisite:** The new menu schema (`docs/menu_schema.md`) — the
+`available` field on items, variants, and addons is the toggle mechanism.
+The codebase still uses the old field names (`sizes` dict, `toppings`);
+they need to be migrated before `manage_menu` can be built.
+
 ### Branch
 
-Both menu management and error recovery are 100% core logic — on master.
-No channel-specific code involved.
+Error recovery is on master. Menu management (when built) will also be
+on master — it's pure core logic. The tool function is channel-agnostic;
+the CLI command is a thin wrapper.
