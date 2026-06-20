@@ -777,25 +777,15 @@ the restaurant's computer:
 It imports `printer.py` from the core, polls the server API, and talks TCP
 to the printer. The agent is a client of the server, not part of it.
 
-### Stripe Checkout UX (no success/cancel URL)
+### Stripe Checkout UX (fixed)
 
-`create_checkout_session()` in `payment.py` doesn't set `success_url` or
-`cancel_url`. After paying, the customer lands on Stripe's generic completion
-page with no link back to WhatsApp. The backend works correctly (webhook
-confirms payment, saves order, notifies restaurant) but the customer
-experience is a dead end.
+`create_checkout_session()` now accepts optional `success_url` and `cancel_url`
+parameters. `GET /payment/success` and `GET /payment/cancel` endpoints serve
+simple landing pages telling the customer to return to WhatsApp. The URLs are
+constructed from the incoming webhook request and passed to Stripe.
 
-**Fix:** Set `success_url` and `cancel_url` to a simple hosted page that says
-"Payment complete — return to WhatsApp" or "Payment cancelled — return to
-WhatsApp." Even a static HTML page served by the FastAPI server would work.
+### Stripe Config Validation at Startup (fixed)
 
-### Stripe Config Validation at Startup
-
-The server starts without checking whether `STRIPE_SECRET_KEY` and
-`STRIPE_WEBHOOK_SECRET` are set. If they're missing, the first customer
-who chooses to pay online gets an error instead of a payment link.
-
-**Fix:** In `_lifespan`, after loading config, validate that Stripe keys
-are present (or log a clear warning that online payment is disabled).
-Consider making online payment optional — if keys aren't set, the LLM
-shouldn't offer the "link" payment method.
+`_lifespan` now checks whether `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`
+are set at startup. If missing, a warning is logged but the server starts —
+online payment is simply unavailable. Cash-on-delivery works regardless.
