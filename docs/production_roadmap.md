@@ -738,3 +738,64 @@ they need to be migrated before `manage_menu` can be built.
 Error recovery is on master. Menu management (when built) will also be
 on master — it's pure core logic. The tool function is channel-agnostic;
 the CLI command is a thin wrapper.
+
+---
+
+## Known Gaps (post-audit, 2026-06-21)
+
+These don't block go-live for a first restaurant but need attention before
+the system is fully hands-off.
+
+### Printer Agent (missing)
+
+The server exposes a printer API (`GET /api/orders`, `POST /api/orders/{id}/printed`)
+and `printer.py` formats orders to ESC/POS bytes for 80mm thermal printers.
+But there is no agent connecting them.
+
+The printer agent is designed as a standalone Python process that runs on
+the restaurant's computer:
+
+1. Poll `GET /api/orders?restaurant_id=X&token=Y` every 5-10 seconds
+2. For each unprinted order, call `format_order()` to get ESC/POS bytes
+3. Open a TCP socket to the printer on port 9100, send the bytes
+4. Call `POST /api/orders/{id}/printed?token=Y` to mark done
+
+**What exists:**
+- `printer.py` on master — `format_order(order, restaurant_name, mode="escpos")`
+  produces ESC/POS bytes. Also supports `mode="file"` for HTML preview during
+  development.
+- Printer API endpoints on twilio-integration (`server.py`) — token-protected,
+  query by restaurant, mark-printed idempotent.
+- `printed` column in the orders database table (component 1).
+
+**What's missing:**
+- The agent itself (poll loop, TCP socket, error recovery, auto-discovery)
+- PyInstaller packaging for the agent into a single `.exe`
+- A `printer_ip` or `printer_config` field in the restaurant config
+
+**To build:** Create a separate directory or repo for the agent script.
+It imports `printer.py` from the core, polls the server API, and talks TCP
+to the printer. The agent is a client of the server, not part of it.
+
+### Stripe Checkout UX (no success/cancel URL)
+
+`create_checkout_session()` in `payment.py` doesn't set `success_url` or
+`cancel_url`. After paying, the customer lands on Stripe's generic completion
+page with no link back to WhatsApp. The backend works correctly (webhook
+confirms payment, saves order, notifies restaurant) but the customer
+experience is a dead end.
+
+**Fix:** Set `success_url` and `cancel_url` to a simple hosted page that says
+"Payment complete — return to WhatsApp" or "Payment cancelled — return to
+WhatsApp." Even a static HTML page served by the FastAPI server would work.
+
+### Stripe Config Validation at Startup
+
+The server starts without checking whether `STRIPE_SECRET_KEY` and
+`STRIPE_WEBHOOK_SECRET` are set. If they're missing, the first customer
+who chooses to pay online gets an error instead of a payment link.
+
+**Fix:** In `_lifespan`, after loading config, validate that Stripe keys
+are present (or log a clear warning that online payment is disabled).
+Consider making online payment optional — if keys aren't set, the LLM
+shouldn't offer the "link" payment method.
