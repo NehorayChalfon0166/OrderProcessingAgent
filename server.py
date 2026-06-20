@@ -111,6 +111,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _router = SessionRouter(cfg.sessions_dir)
     _orders_dir = cfg.orders_dir
 
+    # Validate optional Stripe config — warn but don't block startup
+    if not cfg.stripe_secret_key or not cfg.stripe_webhook_secret:
+        logger.warning(
+            "Stripe keys not set — online payment (link method) is disabled. "
+            "Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in .env to enable."
+        )
+
     logger.info(
         "Twilio server started — %d restaurant(s) loaded",
         len(_registry.list_restaurants()),
@@ -284,6 +291,7 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
 
             # Payment link generation — if PAYMENT_PENDING, create Stripe URL
             if session.state == OrderState.PAYMENT_PENDING:
+                base_url = f"{request.url.scheme}://{request.url.netloc}"
                 payment_url = create_checkout_session(
                     session_id=session.session_id,
                     restaurant_id=restaurant_ctx.config.id,
@@ -293,6 +301,8 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                         session.cart,
                         session.customer.order_type or OrderType.PICKUP,
                     )[2],
+                    success_url=f"{base_url}/payment/success",
+                    cancel_url=f"{base_url}/payment/cancel",
                 )
                 response = f"Pay here to confirm your order: {payment_url}"
 
@@ -418,3 +428,25 @@ async def mark_order_printed(order_id: str, request: Request):
         _db.mark_printed(order_id)
 
     return {"status": "ok"}
+
+
+# ── Payment UX Endpoints ──────────────────────────────────────────────────────
+
+
+@app.get("/payment/success")
+async def payment_success():
+    """Landing page after successful Stripe payment."""
+    return PlainTextResponse(
+        "Payment successful! You can return to WhatsApp now — "
+        "your order is confirmed.",
+        media_type="text/plain",
+    )
+
+
+@app.get("/payment/cancel")
+async def payment_cancel():
+    """Landing page if the customer cancels on Stripe."""
+    return PlainTextResponse(
+        "Payment cancelled. Return to WhatsApp to continue your order.",
+        media_type="text/plain",
+    )
