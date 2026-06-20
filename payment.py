@@ -31,6 +31,8 @@ def create_checkout_session(
     items: list[dict],
     total: float,
     currency: str = "ils",
+    success_url: str | None = None,
+    cancel_url: str | None = None,
 ) -> str:
     """Create a Stripe Checkout Session and return the payment URL.
 
@@ -45,6 +47,10 @@ def create_checkout_session(
                'line_total' keys.
         total: Order total in the currency's main unit (e.g. shekels).
         currency: ISO currency code (default "ils").
+        success_url: Optional URL Stripe redirects to after successful
+            payment. If omitted, Stripe shows a generic completion page.
+        cancel_url: Optional URL Stripe redirects to if the customer
+            cancels. If omitted, Stripe shows a generic page.
 
     Returns:
         The Stripe Checkout URL the customer should visit to pay.
@@ -65,16 +71,20 @@ def create_checkout_session(
             "quantity": item.get("quantity", 1),
         })
 
-    checkout = stripe.checkout.Session.create(
-        mode="payment",
-        line_items=line_items,
-        metadata={
+    kwargs: dict = {
+        "mode": "payment",
+        "line_items": line_items,
+        "metadata": {
             "session_id": session_id,
             "restaurant_id": restaurant_id,
         },
-        # No success_url/cancel_url — customer stays in WhatsApp.
-        # Stripe shows a completion page natively.
-    )
+    }
+    if success_url:
+        kwargs["success_url"] = success_url
+    if cancel_url:
+        kwargs["cancel_url"] = cancel_url
+
+    checkout = stripe.checkout.Session.create(**kwargs)
 
     logger.info(
         "Created Stripe session %s for order %s/%s — %s",
