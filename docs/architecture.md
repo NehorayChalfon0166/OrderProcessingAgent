@@ -81,3 +81,6 @@ See `docs/payment_architecture.md`.
 | [decorator.md](decorator.md) | `@tool` decorator design |
 | [testing.md](testing.md) | Testing strategy |
 | [payment_architecture.md](payment_architecture.md) | Payment flow design |
+| [menu_schema.md](menu_schema.md) | Menu JSON reference schema |
+| [multi_restaurant.md](multi_restaurant.md) | Multi-tenant architecture |
+| [production_roadmap.md](production_roadmap.md) | Production component roadmap |

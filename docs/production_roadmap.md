@@ -624,61 +624,42 @@ Twilio send after `_save_order_file()`.
 
 ## 5. Restaurant Onboarding
 
-**Status:** Designed (V1 manual, V2 WhatsApp)
+**Status:** Done (manual process + documented schema)
 
-How new restaurants get set up in the system.
+How new restaurants get set up in the system. For the scale of this project
+(a handful of restaurants), a fully automated WhatsApp onboarding flow is
+over-engineering. Instead, the developer uses an LLM to convert menus.
 
-### V1 — Manual (current)
+### Process
 
-Edit `restaurants.json`, create a menu file in `menus/`, restart server.
-Works for the first few restaurants. The developer does it.
+1. Restaurant owner sends their menu (PDF, image, text) to the developer.
+2. Developer shares the menu schema ([menu_schema.md](menu_schema.md)) with
+   any LLM along with the menu. Prompt: _"Convert this restaurant menu into
+   the JSON format defined above."_
+3. LLM parses the menu into the JSON format. Developer spot-checks prices
+   and structure.
+4. Save to `menus/{slug}.json`, add entry to `restaurants.json`, restart server.
+5. Configure the restaurant's Twilio WhatsApp number.
 
-### V2 — WhatsApp-based flow
+No code was written for this component. The deliverable is
+[docs/menu_schema.md](menu_schema.md) — a complete reference schema that works
+for any cuisine (pizza, burgers, shawarma, sushi, diner, coffee, etc.).
 
-The restaurant owner messages a dedicated setup bot number. The bot
-guides them through onboarding:
+### Schema Improvements Over the Original Menu Format
 
-1. **Greeting:** The bot introduces itself, asks for the restaurant name
-2. **Menu:** The owner sends the menu — as text, a photo, or a PDF
-3. **Parsing:** The LLM extracts items, prices, categories, deals into
-   the JSON menu format. It validates the structure and shows a preview:
-   ```
-   Here's what I understood:
-
-   Pizzas:
-     Margherita — S:₪40 M:₪55 L:₪65
-     Pepperoni — S:₪45 M:₪60 L:₪70
-   Sides:
-     Garlic Bread — ₪25
-   ...
-
-   Does this look right?
-   ```
-4. **Corrections:** The owner can correct mistakes conversationally:
-   "Margherita large is ₪70, not ₪65"
-   The LLM updates and re-shows.
-5. **Confirm:** Owner confirms. The system writes the menu JSON,
-   registers the restaurant in `restaurants.json`, and the restaurant
-   is live.
-6. **Twilio setup:** The owner provides their Twilio WhatsApp number
-   (or the setup bot helps them provision one).
-
-### Challenges
-
-- **Menu parsing accuracy:** The LLM is good at structured extraction
-  but will make mistakes. The confirmation loop is critical — the owner
-  must review before going live.
-- **Photo menu quality:** A clear photo of a printed menu works well.
-  Handwritten menus, bad lighting, Hebrew-only menus — success drops.
-  Text input is more reliable.
-- **One at a time:** The onboarding flow is a stateful conversation
-  (like the ordering flow). A separate session for "setup" mode.
+| Change | Why |
+|---|---|
+| Categories have `id` fields | Stable references for deals — renaming a category doesn't break deals |
+| `sizes` dict → `variants` array of objects | Each variant has its own `available` flag — can 86 "large" without touching other sizes |
+| `toppings` renamed to `addons` | Works for any cuisine, not just pizza |
+| `available` on items, variants, addons, deals | Runtime out-of-stock toggles (Component 6) |
+| `max_addons` per item | Soft cap on addon spam |
+| `deals.items` references category IDs | Works for any cuisine, not hardcoded pizza/sides/drinks keys |
+| `default_size` → `default_variant` | Consistent with `variants` naming |
 
 ### Branch
 
-Core changes on master (menu validation, `manage_menu` tool for creating
-restaurants). The WhatsApp conversation flow is channel logic on
-twilio-integration.
+No code — the schema doc is on master under `docs/menu_schema.md`.
 
 ## 6. Menu Management + Error Recovery
 

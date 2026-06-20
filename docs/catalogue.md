@@ -17,7 +17,6 @@ class ProductDef:
     default_size: str | None
     flat_price: float | None           # for items without sizes
     available_toppings: list[str]      # topping IDs this product accepts
-    required_options: dict[str, list[str]]  # e.g. {"sauce": ["marinara", "alfredo", "pesto"]}
 
 class ToppingDef:
     id: str
@@ -29,8 +28,12 @@ class DealDef:
     name: str
     description: str
     price: float
-    includes: dict    # raw structure from menu.json
+    includes: dict    # raw {plural_key: {quantity, size?}} from menu.json
 ```
+
+Deals are registered as `ProductDef` (with `flat_price` and `category="Deals"`)
+so `find_product` discovers them through the normal lookup path. No special-casing
+in `add_to_cart`.
 
 ## Catalogue API
 
@@ -57,9 +60,9 @@ class Catalogue:
         # Issues: topping not found, topping not available for this product.
 
     def expand_deal(deal: DealDef) -> list[CartItem]
-        # Expands a deal template into constituent cart items.
-        # Each item has missing_options set for choices the user must make.
-        # e.g. "Family Deal" → 2x Pizza(missing=["which pizza?"]), 1x Side(missing=["which side?"]), ...
+        # Expands a deal into placeholder cart items. NOT called from add_to_cart
+        # (deals are treated as single flat-price items). Exists for future use
+        # if per-item deal expansion is needed.
 
     # --- Prompt hints ---
     def get_hints() -> str
@@ -75,13 +78,14 @@ class Catalogue:
 ## How `add_to_cart` Uses the Catalogue
 
 1. `catalogue.find_product(name)` — if None, return `AddToCartResult(success=False, suggestions=[...])`
-2. `catalogue.resolve_size(product, size)` — validate/normalize size
-3. `catalogue.resolve_toppings(product, topping_names)` — resolve to `CartTopping` objects
-4. Check `product.required_options` against provided `options` dict — collect missing
-5. If product is a deal: `catalogue.expand_deal()` — expand into multiple `CartItem`s
-6. If quantity > 1: set quantity on the `CartItem`
-7. `pricing.price_item(cart_item)` — fill in `base_price` and `line_total`
-8. Return `AddToCartResult(success=True, item=cart_item, missing_options=[...])`
+2. Deals: found via `find_product` (registered as `ProductDef`). Treated as single
+   flat-price cart items — no expansion. The LLM collects deal choices conversationally
+   and records them via `update_item(special_instructions=...)`.
+3. `catalogue.resolve_size(product, size)` — validate/normalize size
+4. `catalogue.resolve_toppings(product, topping_names)` — resolve to `CartTopping` objects
+5. If quantity > 1: set quantity on the `CartItem`
+6. `pricing.price_item(cart_item)` — fill in `base_price` and `line_total`
+7. Return `AddToCartResult(success=True, item=cart_item, issues=[...])`
 
 ## What Changed from v1 `menu_manager.py`
 
@@ -89,5 +93,5 @@ class Catalogue:
 |---|---|
 | `format_menu_for_prompt()` | `get_hints()` — radically smaller output |
 | `validate_extracted_item()` monolith | Split into `resolve_size()`, `resolve_toppings()` — catalogue validates, tools.py assembles |
-| Deals loaded but ignored | `expand_deal()` — first-class support |
+| Deals loaded but ignored | Registered as `ProductDef` — treated as first-class flat-price items |
 | `ExtractedItem` parameter | Tools pass typed params directly |

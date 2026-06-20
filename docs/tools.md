@@ -31,14 +31,15 @@ Parameters:   product_name (str), quantity (int)=1, size (str|None)=None,
 
 1. catalogue.find_product(name)
    → If None: return AddToCartResult(success=False, suggestions=[...])
-2. If product is a deal: catalogue.expand_deal() → add all items → return
+2. Deals are found via find_product (registered as ProductDef). They flow through
+   as single flat-price cart items — no expansion. The LLM collects deal choices
+   conversationally and records them via update_item(special_instructions=...).
 3. catalogue.resolve_size(product, size) → (resolved_size, issues)
 4. catalogue.resolve_toppings(product, names) → (cart_toppings, issues)
-5. Check product.required_options against provided options → missing list
-6. Create CartItem with UUID
-7. pricing.price_item(cart_item) → fill base_price + line_total
-8. Append to session.cart
-9. Return AddToCartResult(success=True, item=..., missing_options=[...], issues=[...])
+5. Create CartItem with UUID
+6. pricing.price_item(cart_item) → fill base_price + line_total
+7. Append to session.cart
+8. Return AddToCartResult(success=True, item=..., issues=[...])
 
 Return type: AddToCartResult
 ```

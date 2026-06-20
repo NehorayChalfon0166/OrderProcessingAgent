@@ -8,7 +8,7 @@ from catalogue import Catalogue
 from models import CartItem, CustomerInfo, Message, MessageRole, OrderState, OrderType
 from pricing import PricingEngine
 from session import OrderSession
-from agent_loop import _apply_transition, _lookup_tool, process_turn
+from agent_loop import _apply_transition, _lookup_tool, _restore_session_from_snapshot, process_turn
 
 
 @pytest.fixture
@@ -332,3 +332,161 @@ class TestProcessTurn:
 
         assert session.state == OrderState.COMPLETED
         assert "confirmed" in text.lower()
+
+
+# =============================================================================
+# Snapshot / Rollback
+# =============================================================================
+
+
+class TestRestoreSessionFromSnapshot:
+    def test_restores_cart(self, catalogue, pricing, tmp_path):
+        """Rollback restores cart to the saved snapshot state."""
+        session = OrderSession()
+        session.cart = [
+            CartItem(
+                product_id="pizza_margherita",
+                name="Margherita",
+                category="Pizzas",
+                size="medium",
+                quantity=1,
+                base_price=12.99,
+                line_total=12.99,
+            )
+        ]
+        session.customer = CustomerInfo(name="John", phone="555-0123")
+        session.add_user_message("I want a pizza")
+
+        # Save snapshot
+        sessions_dir = str(tmp_path / "sessions")
+        session.save(sessions_dir)
+
+        # Simulate partial mutation (what a failed tool batch leaves behind)
+        session.cart.append(
+            CartItem(
+                product_id="pizza_pepperoni",
+                name="Pepperoni",
+                category="Pizzas",
+                size="large",
+                quantity=1,
+                base_price=16.99,
+                line_total=16.99,
+            )
+        )
+        session.state = OrderState.REVIEW
+        session._pending_transition = OrderState.COMPLETED
+
+        # Restore
+        _restore_session_from_snapshot(session, sessions_dir)
+
+        # Verify rollback
+        assert len(session.cart) == 1
+        assert session.cart[0].product_id == "pizza_margherita"
+        assert session.state == OrderState.BUILDING
+        assert session._pending_transition is None
+
+    def test_restores_conversation(self, catalogue, pricing, tmp_path):
+        """Rollback restores conversation to snapshot point."""
+        session = OrderSession()
+        session.customer = CustomerInfo(name="John")
+        session.add_user_message("test message")
+
+        sessions_dir = str(tmp_path / "sessions")
+        session.save(sessions_dir)
+
+        # Simulate tool execution that added conversation messages
+        session.add_assistant_message(content=None, tool_calls=[])
+        session.add_tool_result("c1", "some_tool", '{"success": true}')
+
+        _restore_session_from_snapshot(session, sessions_dir)
+
+        # Should only have the user message — assistant and tool result rolled back
+        assert len(session.conversation) == 1
+        assert session.conversation[0].role == MessageRole.USER
+
+    def test_restores_customer(self, catalogue, pricing, tmp_path):
+        """Rollback restores customer info to snapshot."""
+        session = OrderSession()
+        session.customer = CustomerInfo(name="Alice", phone="123", address="123 Main St")
+        session.add_user_message("order please")
+
+        sessions_dir = str(tmp_path / "sessions")
+        session.save(sessions_dir)
+
+        # Corrupt customer
+        session.customer.name = "Mallory"
+        session.customer.phone = "666"
+
+        _restore_session_from_snapshot(session, sessions_dir)
+
+        assert session.customer.name == "Alice"
+        assert session.customer.phone == "123"
+
+
+class TestProcessTurnRollback:
+    """Test that process_turn rolls back and continues when tool batch crashes."""
+
+    def test_rollback_on_tool_crash(self, catalogue, pricing):
+        """When _execute_tool raises unexpectedly, session rolls back and loop continues."""
+        session = OrderSession()
+        from models import ToolCallRequest
+
+        # Simulate: first tool succeeds (adds item), second tool crashes unexpectedly
+        call_count = [0]
+
+        def make_tool_side_effect():
+            """Create a side effect that succeeds once, then crashes on next call."""
+            original_execute = None  # captured from the module
+
+            def side_effect(sess, cat, prc, tc, funcs):
+                call_count[0] += 1
+                if call_count[0] == 2:
+                    raise RuntimeError("simulated catastrophic tool failure")
+                # Otherwise, delegate to the real _execute_tool
+                from agent_loop import _execute_tool as real_exec
+                return real_exec(sess, cat, prc, tc, funcs)
+
+            return side_effect
+
+        # First LLM call: add_to_cart + another tool that will crash
+        # Second LLM call (after rollback): clean text
+        mock_client = MockLLMClient(responses=[
+            (
+                "",
+                [
+                    ToolCallRequest(id="c1", name="add_to_cart",
+                                   arguments={"product_name": "Margherita"}),
+                    ToolCallRequest(id="c2", name="view_cart",
+                                   arguments={}),
+                ],
+            ),
+            ("Sorry, something went wrong. Let me try again — what would you like?", []),
+        ])
+
+        from agent_loop import _execute_tool as real_execute
+
+        with mock.patch("agent_loop._execute_tool") as mock_execute:
+            # First call: real execution (add_to_cart — succeeds)
+            # Second call: crash
+            # After rollback, the loop continues and calls _execute_tool again
+            # with the new LLM response (no tools) — so mock_execute not called again
+            crash_count = [0]
+
+            def side_effect(sess, cat, prc, tc, funcs):
+                crash_count[0] += 1
+                if crash_count[0] == 2:
+                    raise RuntimeError("simulated catastrophic tool failure")
+                return real_execute(sess, cat, prc, tc, funcs)
+
+            mock_execute.side_effect = side_effect
+
+            text = process_turn(
+                session, "order a Margherita", catalogue, pricing, mock_client,
+            )
+
+        # After rollback: cart should be empty (add_to_cart was rolled back),
+        # and the loop retried, got the clean text response
+        assert len(session.cart) == 0
+        assert "sorry" in text.lower()
+        # Only 1 tool call executed before crash (view_cart was attempt 2, crashed)
+        assert crash_count[0] == 2

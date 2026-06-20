@@ -80,16 +80,28 @@ def process_turn(
             session.save(sessions_dir)
             return content
 
-        # Tool calls present — execute, then loop
+        # Tool calls present — snapshot, execute, then loop
         logger.debug(
             "Iteration %d: %d tool calls", iteration + 1, len(tool_calls)
         )
+
+        # Snapshot before modifying session — enables rollback if tool batch crashes
+        session.save(sessions_dir)
+
         session.add_assistant_message(content=None, tool_calls=tool_calls)
 
-        for tc in tool_calls[:5]:
-            _execute_tool(session, catalogue, pricing, tc, tool_funcs)
+        try:
+            for tc in tool_calls[:5]:
+                _execute_tool(session, catalogue, pricing, tc, tool_funcs)
 
-        _apply_transition(session)
+            _apply_transition(session)
+        except Exception:
+            logger.exception(
+                "Tool batch failed for session %s — rolling back",
+                session.session_id,
+            )
+            _restore_session_from_snapshot(session, sessions_dir)
+            continue
 
     # 3. Fallback — max iterations exhausted (should be extremely rare)
     logger.warning(
@@ -205,3 +217,46 @@ def _apply_transition(session: OrderSession) -> None:
 
     # Fallback — clear unknown transitions
     session._pending_transition = None
+
+
+# =============================================================================
+# Session Restore (for tool atomicity rollback)
+# =============================================================================
+
+
+def _restore_session_from_snapshot(
+    session: OrderSession,
+    sessions_dir: str,
+) -> None:
+    """Reload session state from the last save point and copy it in-place.
+
+    Used when a tool batch crashes after the snapshot was saved but before
+    all tools completed. The snapshot is taken before the assistant message
+    with tool calls, so restoring discards that message — the LLM retries
+    cleanly on the next iteration.
+
+    Args:
+        session: The live session to restore (mutated in place).
+        sessions_dir: Filesystem directory for JSON-backed sessions.
+    """
+    if session._db is not None:
+        restored = session._db.load_session(
+            session.restaurant_id, session.session_id,
+        )
+    else:
+        restored = OrderSession.load(session.session_id, sessions_dir)
+
+    if restored is None:
+        logger.error(
+            "Failed to load snapshot for session %s/%s — rollback skipped",
+            session.restaurant_id, session.session_id,
+        )
+        return
+
+    session.cart = restored.cart
+    session.customer = restored.customer
+    session.conversation = restored.conversation
+    session.state = restored.state
+    session._pending_transition = None
+    session.updated_at = restored.updated_at
+    logger.info("Session %s/%s rolled back to snapshot", session.restaurant_id, session.session_id)

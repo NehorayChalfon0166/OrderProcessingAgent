@@ -50,21 +50,25 @@ simultaneously — each is a separate session.
 
 ## Adding a Restaurant
 
-1. Create `menus/{restaurant_id}.json` — copy an existing menu as a template
-2. Add the entry to `restaurants.json`:
+1. Get the menu from the restaurant owner (PDF, image, or text).
+2. Convert it to JSON using the reference schema in [menu_schema.md](menu_schema.md).
+   Share the schema doc with any LLM along with the menu — prompt:
+   _"Convert this restaurant menu into the JSON format defined above."_
+3. Save the output as `menus/{restaurant_slug}.json`.
+4. Add the entry to `restaurants.json`:
    ```json
    {
      "restaurants": {
-       "your_id": {
+       "your_slug": {
          "name": "Display Name",
-         "menu_path": "menus/your_id.json",
+         "menu_path": "menus/your_slug.json",
          "twilio_phone": "+1234567890"
        }
      }
    }
    ```
-3. Set up the Twilio WhatsApp number to POST webhooks to your server
-4. Restart the server
+5. Set up the Twilio WhatsApp number to POST webhooks to your server.
+6. Restart the server.
 
 No code changes needed — the registry loads new restaurants on startup.
 
