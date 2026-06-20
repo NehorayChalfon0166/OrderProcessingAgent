@@ -3,7 +3,8 @@
     "marios_pizzeria": {
       "name": "Mario's Pizzeria",
       "menu_path": "menus/marios_pizzeria.json",
-      "twilio_phone": "+14155238886"
+      "twilio_phone": "+14155238886",
+      "owner_phone": "+15551234567"
     }
   }
 }

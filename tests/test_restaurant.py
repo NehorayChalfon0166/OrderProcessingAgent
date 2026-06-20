@@ -61,6 +61,7 @@ class TestRestaurantConfig:
             name="Test",
             menu_path="menus/test.json",
             twilio_phone="+1234567890",
+            owner_phone="+15551234567",
         )
         with pytest.raises(Exception):
             config.name = "Changed"  # type: ignore[misc]
@@ -83,6 +84,7 @@ class TestRestaurantRegistryLoading:
                     "name": "Mario's Pizzeria",
                     "menu_path": str(menu),
                     "twilio_phone": "+14155238886",
+                    "owner_phone": "+15551234567",
                 }
             })
 
@@ -105,11 +107,13 @@ class TestRestaurantRegistryLoading:
                     "name": "Restaurant A",
                     "menu_path": str(menu_a),
                     "twilio_phone": "+1111111111",
+                    "owner_phone": "+15551234567",
                 },
                 "rest_b": {
                     "name": "Restaurant B",
                     "menu_path": str(menu_b),
                     "twilio_phone": "+2222222222",
+                    "owner_phone": "+15551234567",
                 },
             })
 
@@ -138,6 +142,7 @@ class TestRestaurantRegistryLoading:
                 "bad": {
                     "menu_path": str(menu),
                     "twilio_phone": "+1234567890",
+                    "owner_phone": "+15551234567",
                 }
             })
             with pytest.raises(ValueError, match="missing required field 'name'"):
@@ -150,6 +155,7 @@ class TestRestaurantRegistryLoading:
                 "bad": {
                     "name": "Bad Restaurant",
                     "twilio_phone": "+1234567890",
+                    "owner_phone": "+15551234567",
                 }
             })
             with pytest.raises(ValueError, match="missing required field 'menu_path'"):
@@ -184,6 +190,37 @@ class TestRestaurantRegistryLoading:
             with pytest.raises(ValueError, match="missing required field 'twilio_phone'"):
                 RestaurantRegistry(str(tmp / "restaurants.json"))
 
+    def test_missing_owner_phone_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            menu = tmp / "menu.json"
+            _make_menu_json(menu)
+            _make_restaurants_json(tmp / "restaurants.json", {
+                "bad": {
+                    "name": "Bad Restaurant",
+                    "menu_path": str(menu),
+                    "twilio_phone": "+1234567890",
+                }
+            })
+            with pytest.raises(ValueError, match="missing required field 'owner_phone'"):
+                RestaurantRegistry(str(tmp / "restaurants.json"))
+
+    def test_empty_owner_phone_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            menu = tmp / "menu.json"
+            _make_menu_json(menu)
+            _make_restaurants_json(tmp / "restaurants.json", {
+                "bad": {
+                    "name": "Bad Restaurant",
+                    "menu_path": str(menu),
+                    "twilio_phone": "+1234567890",
+                    "owner_phone": "",
+                }
+            })
+            with pytest.raises(ValueError, match="missing required field 'owner_phone'"):
+                RestaurantRegistry(str(tmp / "restaurants.json"))
+
     def test_nonexistent_menu_file_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -192,6 +229,7 @@ class TestRestaurantRegistryLoading:
                     "name": "Bad Restaurant",
                     "menu_path": "nonexistent_menu.json",
                     "twilio_phone": "+1234567890",
+                    "owner_phone": "+15551234567",
                 }
             })
             with pytest.raises(FileNotFoundError):
@@ -217,11 +255,13 @@ class TestRestaurantRegistryLookups:
                     "name": "Restaurant A",
                     "menu_path": str(menu_a),
                     "twilio_phone": "+1111111111",
+                    "owner_phone": "+15551234567",
                 },
                 "rest_b": {
                     "name": "Restaurant B",
                     "menu_path": str(menu_b),
                     "twilio_phone": "+2222222222",
+                    "owner_phone": "+15551234567",
                 },
             })
             yield RestaurantRegistry(str(tmp / "restaurants.json"))
@@ -267,6 +307,7 @@ class TestRestaurantRegistryLookups:
                     "name": "Only Restaurant",
                     "menu_path": str(menu),
                     "twilio_phone": "+1234567890",
+                    "owner_phone": "+15551234567",
                 }
             })
             registry = RestaurantRegistry(str(tmp / "restaurants.json"))
@@ -290,6 +331,7 @@ class TestRestaurantContext:
                     "name": "Test Restaurant",
                     "menu_path": str(menu),
                     "twilio_phone": "+1234567890",
+                    "owner_phone": "+15551234567",
                 }
             })
 

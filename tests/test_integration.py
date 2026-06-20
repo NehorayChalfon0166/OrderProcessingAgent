@@ -108,6 +108,7 @@ def _make_restaurant_setup(tmp, second=False):
             "name": "Restaurant A",
             "menu_path": str(menu_a),
             "twilio_phone": "+1111111111",
+            "owner_phone": "+15551234567",
         }
     }
 
@@ -118,6 +119,7 @@ def _make_restaurant_setup(tmp, second=False):
             "name": "Restaurant B",
             "menu_path": str(menu_b),
             "twilio_phone": "+2222222222",
+            "owner_phone": "+15551234567",
         }
 
     restaurants_path = tmp / "restaurants.json"
@@ -569,7 +571,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
     # --- Registry config validation ---
     print("\n-- Registry: RestaurantConfig frozen --")
-    config = RestaurantConfig(id="test", name="Test", menu_path="x.json", twilio_phone="+123")
+    config = RestaurantConfig(id="test", name="Test", menu_path="x.json", twilio_phone="+123", owner_phone="+1555")
     check("config has correct fields", config.id == "test" and config.name == "Test")
     try:
         config.name = "Changed"  # type: ignore
@@ -641,8 +643,10 @@ with tempfile.TemporaryDirectory() as tmpdir:
     print("\n-- Edge: duplicate phone numbers --")
     dup_path = tmp / "dup_restaurants.json"
     _make_restaurants_json(dup_path, {
-        "r1": {"name": "R1", "menu_path": str(tmp / "menus" / "rest_a.json"), "twilio_phone": "+1111111111"},
-        "r2": {"name": "R2", "menu_path": str(tmp / "menus" / "rest_b.json"), "twilio_phone": "+1111111111"},
+        "r1": {"name": "R1", "menu_path": str(tmp / "menus" / "rest_a.json"), "twilio_phone": "+1111111111",
+            "owner_phone": "+15551234567"},
+        "r2": {"name": "R2", "menu_path": str(tmp / "menus" / "rest_b.json"), "twilio_phone": "+1111111111",
+            "owner_phone": "+15551234567"},
     })
     dup_registry = RestaurantRegistry(str(dup_path))
     # Last one wins (dict overwrite)
@@ -671,8 +675,10 @@ with tempfile.TemporaryDirectory() as tmpdir:
     print("\n-- Edge: similar restaurant IDs --")
     similar_path = tmp / "similar_restaurants.json"
     _make_restaurants_json(similar_path, {
-        "marios": {"name": "Marios", "menu_path": str(tmp / "menus" / "rest_a.json"), "twilio_phone": "+1111111111"},
-        "marios_pizzeria": {"name": "Marios Pizzeria", "menu_path": str(tmp / "menus" / "rest_b.json"), "twilio_phone": "+2222222222"},
+        "marios": {"name": "Marios", "menu_path": str(tmp / "menus" / "rest_a.json"), "twilio_phone": "+1111111111",
+            "owner_phone": "+15551234567"},
+        "marios_pizzeria": {"name": "Marios Pizzeria", "menu_path": str(tmp / "menus" / "rest_b.json"), "twilio_phone": "+2222222222",
+            "owner_phone": "+15551234567"},
     })
     sim_reg = RestaurantRegistry(str(similar_path))
     check("exact ID match (not prefix)", sim_reg.get_by_id("marios").config.name == "Marios")

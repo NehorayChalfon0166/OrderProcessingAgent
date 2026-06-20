@@ -34,12 +34,15 @@ class RestaurantConfig:
         menu_path: Path to the restaurant's menu JSON file.
         twilio_phone: The Twilio WhatsApp number customers message to reach
             this restaurant (e.g. "+14155238886").
+        owner_phone: The restaurant owner's personal WhatsApp number.
+            New-order notifications are sent here (not to twilio_phone).
     """
 
     id: str
     name: str
     menu_path: str
     twilio_phone: str
+    owner_phone: str
 
 
 @dataclass
@@ -155,8 +158,9 @@ class RestaurantRegistry:
             self._by_id[config.id] = ctx
             self._by_phone[config.twilio_phone] = ctx
             logger.info(
-                "Loaded restaurant '%s' (%s) — menu: %s, phone: %s",
+                "Loaded restaurant '%s' (%s) — menu: %s, phone: %s, owner: %s",
                 config.name, config.id, config.menu_path, config.twilio_phone,
+                config.owner_phone,
             )
 
     @staticmethod
@@ -165,6 +169,7 @@ class RestaurantRegistry:
         name = data.get("name", "")
         menu_path = data.get("menu_path", "")
         twilio_phone = data.get("twilio_phone", "")
+        owner_phone = data.get("owner_phone", "")
 
         if not name:
             raise ValueError(
@@ -179,10 +184,17 @@ class RestaurantRegistry:
                 f"Restaurant '{rid}' is missing required field 'twilio_phone'. "
                 f"Every restaurant must have a Twilio WhatsApp number."
             )
+        if not owner_phone:
+            raise ValueError(
+                f"Restaurant '{rid}' is missing required field 'owner_phone'. "
+                f"Every restaurant must have an owner phone number for "
+                f"new-order notifications."
+            )
 
         return RestaurantConfig(
             id=rid,
             name=name,
             menu_path=menu_path,
             twilio_phone=twilio_phone,
+            owner_phone=owner_phone,
         )
