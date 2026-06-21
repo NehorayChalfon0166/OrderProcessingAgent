@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Active Sessions — Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Active Sessions</h1>
+    <p class="page-subtitle">{{ sessions | length }} active session{{ 's' if sessions | length != 1 else '' }} found</p>
+  </div>
+</div>
+
+{# ── Filter Bar ── #}
+<div class="filter-bar">
+  <div class="filter-group">
+    <label class="filter-label" for="filter-restaurant">Restaurant</label>
+    <select id="filter-restaurant" class="filter-select" data-filter="restaurant_id">
+      <option value="">All Restaurants</option>
+      {% for r in restaurants %}
+      <option value="{{ r.id }}" {{ 'selected' if filters.restaurant_id == r.id }}>{{ r.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+{# ── Sessions Table ── #}
+{% if sessions %}
+<div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Session ID</th>
+          <th>Customer</th>
+          <th>Restaurant</th>
+          <th>Order ID</th>
+          <th>Last Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sessions %}
+        <tr class="clickable-row" data-href="/sessions/{{ s.session_id }}{{ token_url }}">
+          <td>
+            <code class="id-mono">{{ s.session_id[:12] }}{% if s.session_id | length > 12 %}…{% endif %}</code>
+          </td>
+          <td>
+            <div class="cell-primary">{{ s.customer_name or 'Unknown' }}</div>
+            {% if s.customer_phone %}
+            <div class="cell-muted">{{ s.customer_phone }}</div>
+            {% endif %}
+          </td>
+          <td>{{ s.restaurant_id }}</td>
+          <td>
+            {% if s.order_id %}
+            <code class="id-mono">{{ s.order_id[:12] }}{% if s.order_id | length > 12 %}…{% endif %}</code>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>{{ s.updated_at or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+</div>
+{% else %}
+{# ── Empty State ── #}
+<div class="empty-state">
+  <div class="empty-state-icon">💬</div>
+  <h3 class="empty-state-title">No active sessions</h3>
+  <p class="empty-state-text">Sessions will appear here when customers start ordering.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    // Clickable rows
+    document.querySelectorAll('.clickable-row').forEach(function (row) {
+      row.addEventListener('click', function () {
+        window.location.href = this.dataset.href;
+      });
+    });
+
+    // Restaurant filter
+    var filterSelect = document.getElementById('filter-restaurant');
+    if (filterSelect) {
+      filterSelect.addEventListener('change', function () {
+        var val = this.value;
+        var url = '/sessions{{ token_url }}';
+        if (val) {
+          url += (url.indexOf('?') !== -1 ? '&' : '?') + 'restaurant_id=' + encodeURIComponent(val);
+        }
+        window.location.href = url;
+      });
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}Restaurants — Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Restaurants</h1>
+    <p class="page-subtitle">{{ stats | length }} restaurant{{ 's' if stats | length != 1 else '' }} configured</p>
+  </div>
+  <div>
+    <button type="button" class="btn btn-primary" onclick="toggleAddForm()">+ Add Restaurant</button>
+  </div>
+</div>
+
+{# ── Restaurant Grid ── #}
+{% if stats %}
+<div class="restaurant-grid">
+  {% for s in stats %}
+  <div class="restaurant-card card">
+    <div class="card-header">
+      <div class="restaurant-header">
+        <div class="avatar">{{ s.config.name[:1] | upper }}</div>
+        <h3>{{ s.config.name }}</h3>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="detail-row">
+        <span class="detail-label">ID</span>
+        <span class="detail-value"><code class="id-mono">{{ s.config.id }}</code></span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Twilio Phone</span>
+        <span class="detail-value">{{ s.config.twilio_phone }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Owner Phone</span>
+        <span class="detail-value">{{ s.config.owner_phone }}</span>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-item">
+          <span class="stat-value">{{ s.order_count }}</span>
+          <span class="stat-label">Orders</span>
+        </div>
+        <div class="stat-item {{ 'stat-warning' if s.unprinted_count > 0 }}">
+          <span class="stat-value">{{ s.unprinted_count }}</span>
+          <span class="stat-label">Pending Print</span>
+        </div>
+      </div>
+
+      <div class="card-actions">
+        <a href="/orders?restaurant_id={{ s.config.id }}{{ '&token=' ~ token if token }}" class="btn btn-sm btn-outline">View Orders</a>
+        <a href="/menu/{{ s.config.id }}{{ token_url }}" class="btn btn-sm btn-outline">View Menu</a>
+        <a href="/sessions?restaurant_id={{ s.config.id }}{{ '&token=' ~ token if token }}" class="btn btn-sm btn-outline">Sessions</a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+{# ── Empty State ── #}
+<div class="empty-state">
+  <div class="empty-state-icon">🍽️</div>
+  <h3 class="empty-state-title">No restaurants configured</h3>
+  <p class="empty-state-text">Add your first restaurant to get started.</p>
+</div>
+{% endif %}
+
+{# ── Add Restaurant Form ── #}
+<div class="card" id="add-restaurant-form" hidden>
+  <div class="card-header">
+    <h3 class="card-title">Add New Restaurant</h3>
+  </div>
+  <div class="card-body">
+    <form data-restaurant-form action="/restaurants/add{{ token_url }}" method="POST">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label" for="restaurant_id">Restaurant ID</label>
+          <input type="text" id="restaurant_id" name="restaurant_id" class="form-input" placeholder="e.g. marios_pizzeria" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="name">Name</label>
+          <input type="text" id="name" name="name" class="form-input" placeholder="e.g. Mario's Pizzeria" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="phone">Twilio Phone</label>
+          <input type="text" id="phone" name="phone" class="form-input" placeholder="+14155238886" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="owner">Owner Phone</label>
+          <input type="text" id="owner" name="owner" class="form-input" placeholder="+1234567890" required>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Add Restaurant</button>
+        <button type="button" class="btn btn-ghost" onclick="toggleAddForm()">Cancel</button>
+      </div>
+      <div class="form-result"></div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function toggleAddForm() {
+    var form = document.getElementById('add-restaurant-form');
+    if (form) {
+      form.hidden = !form.hidden;
+      if (!form.hidden) {
+        form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }
+
+  // Add restaurant form — fetch submission
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-restaurant-form]').forEach(function (form) {
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var resultDiv = form.querySelector('.form-result');
+        var data = new FormData(form);
+        fetch(form.action, { method: 'POST', body: data })
+          .then(function (r) {
+            return r.text().then(function (html) {
+              return { ok: r.ok, html: html };
+            });
+          })
+          .then(function (result) {
+            if (resultDiv) {
+              resultDiv.innerHTML = result.html;
+            }
+            if (result.ok) {
+              setTimeout(function () { window.location.reload(); }, 1500);
+            }
+          })
+          .catch(function (err) {
+            if (resultDiv) {
+              resultDiv.innerHTML = '<p style="color:red">Error: ' + err.message + '</p>';
+            }
+          });
+      });
+    });
+  });
+</script>
+{% endblock %}

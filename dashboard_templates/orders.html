@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Orders{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Orders</h1>
+    <p class="page-subtitle">{{ orders|length }} order{{ 's' if orders|length != 1 else '' }} found</p>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <div class="filter-group">
+    <label class="filter-label" for="filter-restaurant">Restaurant</label>
+    <select id="filter-restaurant" class="filter-select" data-filter="restaurant_id">
+      <option value="">All Restaurants</option>
+      {% for r in restaurants %}
+        <option value="{{ r.id }}" {% if filters.restaurant_id == r.id %}selected{% endif %}>{{ r.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="filter-group">
+    <label class="filter-label" for="filter-order-type">Order Type</label>
+    <select id="filter-order-type" class="filter-select" data-filter="order_type">
+      <option value="">All</option>
+      <option value="delivery" {% if filters.order_type == 'delivery' %}selected{% endif %}>Delivery</option>
+      <option value="pickup" {% if filters.order_type == 'pickup' %}selected{% endif %}>Pickup</option>
+    </select>
+  </div>
+
+  <div class="filter-group">
+    <label class="filter-label" for="filter-payment">Payment Method</label>
+    <select id="filter-payment" class="filter-select" data-filter="payment_method">
+      <option value="">All</option>
+      <option value="cash" {% if filters.payment_method == 'cash' %}selected{% endif %}>Cash</option>
+      <option value="card" {% if filters.payment_method == 'card' %}selected{% endif %}>Card</option>
+      <option value="stripe" {% if filters.payment_method == 'stripe' %}selected{% endif %}>Stripe</option>
+    </select>
+  </div>
+
+  <div class="filter-group">
+    <label class="filter-label" for="filter-limit">Limit</label>
+    <select id="filter-limit" class="filter-select" data-filter="limit">
+      <option value="25" {% if filters.limit == 25 %}selected{% endif %}>25</option>
+      <option value="50" {% if filters.limit == 50 %}selected{% endif %}>50</option>
+      <option value="100" {% if filters.limit == 100 %}selected{% endif %}>100</option>
+      <option value="200" {% if filters.limit == 200 %}selected{% endif %}>200</option>
+    </select>
+  </div>
+</div>
+
+{% if orders %}
+<div class="table-container">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Order ID</th>
+        <th>Customer</th>
+        <th>Items</th>
+        <th>Total</th>
+        <th>Type</th>
+        <th>Payment</th>
+        <th>Status</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for order in orders %}
+      <tr class="clickable-row" data-href="/orders/{{ order.order_id }}{{ token_url }}">
+        <td>
+          <span class="order-id-display">{{ order.order_id[:12] }}…</span>
+          <button class="copy-btn" data-copy="{{ order.order_id }}" title="Copy full ID" onclick="event.stopPropagation()">📋</button>
+        </td>
+        <td>
+          <div class="customer-name">{{ order.customer_name }}</div>
+          <div class="text-muted text-sm">{{ order.customer_phone }}</div>
+        </td>
+        <td>{{ order.items|length }}</td>
+        <td>${{ '%.2f' | format(order.total) }}</td>
+        <td>
+          {% if order.order_type == 'delivery' %}
+            <span class="badge badge-info">Delivery</span>
+          {% else %}
+            <span class="badge badge-neutral">Pickup</span>
+          {% endif %}
+        </td>
+        <td>
+          <span class="badge badge-neutral">{{ order.payment_method | capitalize }}</span>
+        </td>
+        <td>
+          {% if order.printed %}
+            <span class="badge badge-success">Printed</span>
+          {% else %}
+            <span class="badge badge-warning">Pending</span>
+          {% endif %}
+        </td>
+        <td>{{ order.created_at[:10] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="empty-state-icon">📦</div>
+  <h3 class="empty-state-title">No orders found</h3>
+  <p class="empty-state-text">Try adjusting your filters or check back later.</p>
+</div>
+{% endif %}
+{% endblock %}

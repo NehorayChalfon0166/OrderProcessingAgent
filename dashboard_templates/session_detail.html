@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Session {{ session.session_id[:8] }} — Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <a href="/sessions{{ token_url }}" class="back-link">← Back to Sessions</a>
+    <h1 class="page-title">Session {{ session.session_id[:8] }}…</h1>
+  </div>
+</div>
+
+{# ── Info + Customer Grid ── #}
+<div class="detail-grid">
+  {# Left: Session Info #}
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Session Info</h3>
+    </div>
+    <div class="card-body">
+      <div class="detail-row">
+        <span class="detail-label">Session ID</span>
+        <span class="detail-value"><code class="id-mono">{{ session.session_id }}</code></span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Restaurant</span>
+        <span class="detail-value">{{ restaurant_name }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">State</span>
+        <span class="detail-value">
+          {% if session.state == 'building' %}
+            <span class="badge badge-info">Building</span>
+          {% elif session.state == 'review' %}
+            <span class="badge badge-warning">Review</span>
+          {% elif session.state == 'completed' %}
+            <span class="badge badge-success">Completed</span>
+          {% elif session.state == 'cancelled' %}
+            <span class="badge badge-danger">Cancelled</span>
+          {% elif session.state == 'payment_pending' %}
+            <span class="badge badge-warning">Payment Pending</span>
+          {% else %}
+            <span class="badge">{{ session.state }}</span>
+          {% endif %}
+        </span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Last Updated</span>
+        <span class="detail-value">{{ session.updated_at or '—' }}</span>
+      </div>
+    </div>
+  </div>
+
+  {# Right: Customer #}
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Customer</h3>
+    </div>
+    <div class="card-body">
+      <div class="detail-row">
+        <span class="detail-label">Name</span>
+        <span class="detail-value">{{ session.customer.name or 'Not provided' }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Phone</span>
+        <span class="detail-value">{{ session.customer.phone or 'Not provided' }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Address</span>
+        <span class="detail-value">{{ session.customer.address or 'Not provided' }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Order Type</span>
+        <span class="detail-value">{{ session.customer.order_type or 'Not set' }}</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Cart ── #}
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Cart</h3>
+    {% if session.cart %}
+    <span class="badge">{{ session.cart | length }} item{{ 's' if session.cart | length != 1 }}</span>
+    {% endif %}
+  </div>
+  <div class="card-body">
+    {% if session.cart %}
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Item Name</th>
+            <th>Size</th>
+            <th>Qty</th>
+            <th>Toppings</th>
+            <th>Special Instructions</th>
+            <th>Base Price</th>
+            <th>Line Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in session.cart %}
+          <tr>
+            <td><strong>{{ item.name }}</strong></td>
+            <td>{{ item.size or '—' }}</td>
+            <td>{{ item.quantity }}</td>
+            <td>
+              {% if item.toppings %}
+                {% for t in item.toppings %}
+                <span class="tag">{{ t.name }}</span>
+                {% endfor %}
+              {% else %}
+              <span class="text-muted">None</span>
+              {% endif %}
+            </td>
+            <td>{{ item.special_instructions or '—' }}</td>
+            <td>${{ '%.2f' | format(item.base_price) }}</td>
+            <td><strong>${{ '%.2f' | format(item.line_total) }}</strong></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted">Cart is empty</p>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Conversation ── #}
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Conversation</h3>
+  </div>
+  <div class="card-body">
+    {% set visible_messages = [] %}
+    {% for msg in session.conversation %}
+      {% if msg.role != 'tool' %}
+        {% if visible_messages.append(msg) %}{% endif %}
+      {% endif %}
+    {% endfor %}
+
+    {% if visible_messages %}
+    <div class="conversation">
+      {% for msg in visible_messages %}
+      <div class="message {{ 'message-user' if msg.role == 'user' else 'message-assistant' }}">
+        <div class="message-role">{{ msg.role | capitalize }}</div>
+        <div class="message-content">
+          {% if msg.content %}
+            {{ msg.content }}
+          {% else %}
+            <span class="text-muted">[Tool call]</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-muted">No messages yet</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

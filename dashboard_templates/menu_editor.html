@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}{{ restaurant_name }} — Menu — Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <a href="/restaurants{{ token_url }}" class="back-link">← Back to Restaurants</a>
+    <h1 class="page-title">{{ restaurant_name }} — Menu</h1>
+  </div>
+</div>
+
+{# ── Info Bar ── #}
+<div class="info-bar">
+  <div class="info-item">
+    <span class="info-label">Currency</span>
+    <span class="info-value">{{ menu.currency | default('USD') }}</span>
+  </div>
+  <div class="info-item">
+    <span class="info-label">Delivery Fee</span>
+    <span class="info-value">${{ '%.2f' | format(menu.delivery_fee | default(0)) }}</span>
+  </div>
+  <div class="info-item">
+    <span class="info-label">Min Order Amount</span>
+    <span class="info-value">${{ '%.2f' | format(menu.min_order_amount | default(0)) }}</span>
+  </div>
+</div>
+
+{# ── Menu Categories ── #}
+{% for category in menu.categories %}
+<div class="menu-category card">
+  <div class="card-header">
+    <h3 class="card-title">{{ category.name }}</h3>
+    <span class="badge">{{ category["items"] | length }} item{{ 's' if category["items"] | length != 1 }}</span>
+  </div>
+  <div class="card-body">
+    {% for item in category["items"] %}
+    <div class="menu-item" id="item-{{ item.id }}">
+      <div class="menu-item-info">
+        <div class="menu-item-name">
+          {{ item.name }}
+          {% if item.available is defined and item.available == false %}
+            <span class="badge badge-danger">Out of Stock</span>
+          {% endif %}
+        </div>
+        {% if item.description %}
+        <div class="menu-item-description">{{ item.description }}</div>
+        {% endif %}
+        {% if item.unavailable_variants is defined and item.unavailable_variants %}
+        <div class="menu-item-unavailable">
+          <span class="text-muted">Unavailable variants:</span>
+          {% for v in item.unavailable_variants %}
+          <span class="tag tag-danger">{{ v }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="menu-item-pricing">
+        {% if item.sizes is defined and item.sizes %}
+        <div class="menu-item-sizes">
+          {% for size, price in item.sizes.items() %}
+          <span class="tag tag-price">{{ size }}: ${{ '%.2f' | format(price) }}</span>
+          {% endfor %}
+        </div>
+        {% elif item.price is defined %}
+        <div class="menu-item-price">${{ '%.2f' | format(item.price) }}</div>
+        {% endif %}
+      </div>
+      <div class="menu-item-actions">
+        <button type="button" class="btn btn-sm btn-outline" onclick="toggleEditForm('edit-{{ item.id }}')">Edit Price</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="toggleStock('{{ item.id }}')">Toggle Stock</button>
+      </div>
+
+      {# ── Inline Edit Form ── #}
+      <div class="edit-form" id="edit-{{ item.id }}" hidden>
+        <form data-menu-form action="/menu/{{ restaurant_id }}/edit{{ token_url }}" method="POST">
+          <input type="hidden" name="action" value="set_price">
+          <input type="hidden" name="item_id" value="{{ item.id }}">
+          <div class="edit-form-fields">
+            {% if item.sizes is defined and item.sizes %}
+            <div class="form-group">
+              <label class="form-label">Variant</label>
+              <select name="variant" class="form-input">
+                {% for size in item.sizes.keys() %}
+                <option value="{{ size }}">{{ size }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+            <div class="form-group">
+              <label class="form-label">New Price</label>
+              <input type="number" name="value" step="0.01" min="0" class="form-input" placeholder="0.00" required>
+            </div>
+          </div>
+          <div class="edit-form-actions">
+            <button type="submit" class="btn btn-sm btn-primary">Save</button>
+            <button type="button" class="btn btn-sm btn-ghost" onclick="toggleEditForm('edit-{{ item.id }}')">Cancel</button>
+          </div>
+          <div class="form-result"></div>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+{# ── Deals ── #}
+{% if menu.deals %}
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Deals &amp; Combos</h3>
+    <span class="badge">{{ menu.deals | length }}</span>
+  </div>
+  <div class="card-body">
+    {% for deal in menu.deals %}
+    <div class="menu-item">
+      <div class="menu-item-info">
+        <div class="menu-item-name">{{ deal.name }}</div>
+        {% if deal.description %}
+        <div class="menu-item-description">{{ deal.description }}</div>
+        {% endif %}
+        {% if deal.includes %}
+        <div class="menu-item-includes">
+          <span class="text-muted">Includes:</span>
+          {% for key, val in deal.includes.items() %}
+          <span class="tag">{{ key }}: {{ val }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="menu-item-pricing">
+        <div class="menu-item-price">${{ '%.2f' | format(deal.price) }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Toppings ── #}
+{% if menu.toppings %}
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Available Toppings</h3>
+    <span class="badge">{{ menu.toppings | length }}</span>
+  </div>
+  <div class="card-body">
+    <div class="toppings-grid">
+      {% for t in menu.toppings %}
+      <div class="topping-item">
+        <span class="topping-name">{{ t.name }}</span>
+        <span class="topping-price">${{ '%.2f' | format(t.price) }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function toggleEditForm(id) {
+    var form = document.getElementById(id);
+    if (form) {
+      form.hidden = !form.hidden;
+    }
+  }
+
+  function toggleStock(itemId) {
+    var el = document.getElementById('item-' + itemId);
+    var isOutOfStock = el && el.querySelector('.badge-danger');
+    var form = new FormData();
+    form.append('action', isOutOfStock ? 'in_stock' : 'out_of_stock');
+    form.append('item_id', itemId);
+    fetch('/menu/{{ restaurant_id }}/edit{{ token_url }}', {
+      method: 'POST',
+      body: form
+    })
+    .then(function (r) { return r.text(); })
+    .then(function (html) {
+      var el = document.getElementById('item-' + itemId);
+      if (el) {
+        var result = document.createElement('div');
+        result.className = 'form-result';
+        result.innerHTML = html;
+        el.appendChild(result);
+        setTimeout(function () { result.remove(); }, 3000);
+      }
+    })
+    .catch(function (err) {
+      alert('Error: ' + err.message);
+    });
+  }
+
+  // Menu edit forms — fetch submission
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-menu-form]').forEach(function (form) {
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var resultDiv = form.querySelector('.form-result');
+        var data = new FormData(form);
+        fetch(form.action, { method: 'POST', body: data })
+          .then(function (r) { return r.text(); })
+          .then(function (html) {
+            if (resultDiv) {
+              resultDiv.innerHTML = html;
+              setTimeout(function () { resultDiv.innerHTML = ''; }, 4000);
+            }
+          })
+          .catch(function (err) {
+            if (resultDiv) {
+              resultDiv.innerHTML = '<p style="color:red">Error: ' + err.message + '</p>';
+            }
+          });
+      });
+    });
+  });
+</script>
+{% endblock %}
