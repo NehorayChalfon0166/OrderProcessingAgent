@@ -333,3 +333,222 @@ class TestEventLoopOffloading:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
             assert mock_tt.called
+
+
+# =============================================================================
+# Printer API
+# =============================================================================
+
+
+class TestPrinterAPI:
+    def test_get_orders_valid_token(self, client, mock_deps):
+        """Returns unprinted orders for a valid token."""
+        import server as srv
+        srv._api_token = "secret"
+        mock_db = mock.Mock()
+        mock_db.get_unprinted_orders.return_value = [
+            {"order_id": "ORDER001", "items": [], "subtotal": 10.0,
+             "delivery_fee": 0, "total": 10.0, "order_type": "pickup",
+             "created_at": "2026-06-21T12:00:00Z",
+             "customer_name": "Test", "customer_phone": "555"}
+        ]
+        srv._db = mock_db
+        try:
+            resp = client.get(
+                "/api/orders",
+                params={"restaurant_id": "marios", "token": "secret"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            orders = data["orders"]
+            assert len(orders) == 1
+            assert orders[0]["order_id"] == "ORDER001"
+        finally:
+            srv._api_token = ""
+            srv._db = None
+
+    def test_get_orders_invalid_token(self, client, mock_deps):
+        """Returns 403 for wrong token."""
+        import server as srv
+        srv._api_token = "secret"
+        try:
+            resp = client.get(
+                "/api/orders",
+                params={"restaurant_id": "marios", "token": "wrong"},
+            )
+            assert resp.status_code == 403
+        finally:
+            srv._api_token = ""
+
+    def test_get_orders_missing_token(self, client, mock_deps):
+        """Returns 403 when no token provided."""
+        import server as srv
+        srv._api_token = ""
+        try:
+            resp = client.get(
+                "/api/orders",
+                params={"restaurant_id": "marios", "token": "wrong"},
+            )
+            assert resp.status_code == 403
+        finally:
+            srv._api_token = ""
+
+    def test_mark_printed_valid_token(self, client, mock_deps):
+        """Marks an order as printed."""
+        import server as srv
+        srv._api_token = "secret"
+        mock_db = mock.Mock()
+        srv._db = mock_db
+        try:
+            resp = client.post(
+                "/api/orders/ORDER001/printed",
+                params={"token": "secret"},
+            )
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "ok"}
+            mock_db.mark_printed.assert_called_once_with("ORDER001")
+        finally:
+            srv._api_token = ""
+            srv._db = None
+
+    def test_mark_printed_idempotent(self, client, mock_deps):
+        """Marking already-printed order still returns 200."""
+        import server as srv
+        srv._api_token = "secret"
+        mock_db = mock.Mock()
+        srv._db = mock_db
+        try:
+            resp = client.post(
+                "/api/orders/ORDER001/printed",
+                params={"token": "secret"},
+            )
+            assert resp.status_code == 200
+        finally:
+            srv._api_token = ""
+            srv._db = None
+
+
+# =============================================================================
+# Stripe Webhook
+# =============================================================================
+
+
+class TestStripeWebhook:
+    def test_non_checkout_event_ignored(self, client, mock_deps):
+        """Non-checkout.session.completed events return ignored."""
+        with mock.patch("server.verify_webhook") as mock_vw:
+            mock_vw.return_value = {"type": "charge.succeeded"}
+            resp = client.post(
+                "/payment/webhook",
+                content=b"{}",
+                headers={"Stripe-Signature": "sig"},
+            )
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "ignored"}
+
+    def test_invalid_signature_returns_400(self, client, mock_deps):
+        """Invalid Stripe signature returns 400."""
+        with mock.patch("server.verify_webhook") as mock_vw:
+            mock_vw.side_effect = __import__("stripe").error.SignatureVerificationError(
+                "bad", "sig"
+            )
+            resp = client.post(
+                "/payment/webhook",
+                content=b"{}",
+                headers={"Stripe-Signature": "bad"},
+            )
+            assert resp.status_code == 400
+
+    def test_checkout_completed_completes_order(self, client, mock_deps):
+        """checkout.session.completed transitions order to COMPLETED."""
+        import server as srv
+        from session import OrderSession
+
+        ctx = _make_restaurant_ctx("marios_pizzeria")
+        srv._registry.get_by_id = mock.Mock(return_value=ctx)
+        session = OrderSession(restaurant_id="marios_pizzeria")
+        session.session_id = "972539534345"
+        session.state = __import__("models", fromlist=["OrderState"]).OrderState.PAYMENT_PENDING
+        # Leave cart empty — _save_order_file serializes it to JSON
+        mock_router = mock.Mock()
+        mock_router.get_or_create.return_value = session
+        srv._router = mock_router
+        try:
+            with mock.patch("server.verify_webhook") as mock_vw:
+                mock_vw.return_value = {
+                    "type": "checkout.session.completed",
+                    "data": {
+                        "object": {
+                            "metadata": {
+                                "restaurant_id": "marios_pizzeria",
+                                "session_id": "972539534345",
+                            }
+                        }
+                    },
+                }
+                resp = client.post(
+                    "/payment/webhook",
+                    content=b"{}",
+                    headers={"Stripe-Signature": "sig"},
+                )
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "ok"}
+        finally:
+            srv._router = mock_deps["router"]
+            srv._registry.get_by_id = mock.Mock(return_value=None)
+
+    def test_already_completed_is_idempotent(self, client, mock_deps):
+        """Already COMPLETED order returns already_completed."""
+        import server as srv
+        from session import OrderSession
+
+        ctx = _make_restaurant_ctx("marios_pizzeria")
+        srv._registry.get_by_id = mock.Mock(return_value=ctx)
+        session = OrderSession(restaurant_id="marios_pizzeria")
+        session.session_id = "972539534345"
+        session.state = __import__("models", fromlist=["OrderState"]).OrderState.COMPLETED
+        mock_router = mock.Mock()
+        mock_router.get_or_create.return_value = session
+        srv._router = mock_router
+        try:
+            with mock.patch("server.verify_webhook") as mock_vw:
+                mock_vw.return_value = {
+                    "type": "checkout.session.completed",
+                    "data": {
+                        "object": {
+                            "metadata": {
+                                "restaurant_id": "marios_pizzeria",
+                                "session_id": "972539534345",
+                            }
+                        }
+                    },
+                }
+                resp = client.post(
+                    "/payment/webhook",
+                    content=b"{}",
+                    headers={"Stripe-Signature": "sig"},
+                )
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "already_completed"}
+        finally:
+            srv._router = mock_deps["router"]
+            srv._registry.get_by_id = mock.Mock(return_value=None)
+
+
+# =============================================================================
+# Payment UX Pages
+# =============================================================================
+
+
+class TestPaymentPages:
+    def test_success_page(self, client):
+        """GET /payment/success returns 200 with return-to-WhatsApp message."""
+        resp = client.get("/payment/success")
+        assert resp.status_code == 200
+        assert "whatsapp" in resp.text.lower()
+
+    def test_cancel_page(self, client):
+        """GET /payment/cancel returns 200 with return-to-WhatsApp message."""
+        resp = client.get("/payment/cancel")
+        assert resp.status_code == 200
+        assert "whatsapp" in resp.text.lower()

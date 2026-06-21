@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time as _time_module
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -43,6 +42,7 @@ _llm: LLMClient | None = None
 _twilio: TwilioClient | None = None
 _router: SessionRouter | None = None
 _orders_dir: str = "orders"
+_api_token: str = ""
 _locks: dict[str, asyncio.Lock] = {}
 _lock_access: dict[str, float] = {}  # identity → monotonic timestamp
 
@@ -96,7 +96,7 @@ def _is_session_stale(session) -> bool:
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Load configuration and initialise all dependencies at startup."""
-    global _registry, _db, _llm, _twilio, _router, _orders_dir
+    global _registry, _db, _llm, _twilio, _router, _orders_dir, _api_token
 
     cfg = AppConfig.from_env()
 
@@ -110,6 +110,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     _router = SessionRouter(cfg.sessions_dir)
     _orders_dir = cfg.orders_dir
+    _api_token = cfg.api_token
 
     # Validate optional Stripe config — warn but don't block startup
     if not cfg.stripe_secret_key or not cfg.stripe_webhook_secret:
@@ -213,6 +214,13 @@ def _notify_restaurant(session, restaurant_ctx: RestaurantContext) -> None:
 
 
 app = FastAPI(title="Order Processing Agent — Twilio", lifespan=_lifespan)
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Health check endpoint for monitoring and load balancers."""
+    return {"status": "ok"}
+
 
 # ── WhatsApp Webhook ───────────────────────────────────────────────────────────
 
@@ -396,8 +404,7 @@ async def receive_payment(request: Request):
 
 def _check_printer_token(token: str) -> bool:
     """Validate the printer agent API token."""
-    expected = os.environ.get("API_TOKEN", "")
-    return bool(expected) and token == expected
+    return bool(_api_token) and token == _api_token
 
 
 @app.get("/api/orders")
