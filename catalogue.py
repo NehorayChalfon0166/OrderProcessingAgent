@@ -119,12 +119,28 @@ class Catalogue:
         for category in self._menu_data.get("categories", []):
             category_name = category.get("name", "")
             for item in category.get("items", []):
+                # Skip items explicitly marked unavailable
+                if item.get("available") is False:
+                    continue
+
+                # Filter out unavailable variants from the sizes dict
+                sizes = item.get("sizes")
+                unavailable = item.get("unavailable_variants", [])
+                if sizes and unavailable:
+                    sizes = {
+                        k: v for k, v in sizes.items()
+                        if k not in unavailable
+                    }
+                    if not sizes:
+                        # All variants unavailable — skip the item
+                        continue
+
                 product = ProductDef(
                     id=item["id"],
                     name=item["name"],
                     category=category_name,
                     description=item.get("description", ""),
-                    sizes=item.get("sizes"),
+                    sizes=sizes,
                     default_size=item.get("default_size"),
                     flat_price=item.get("price"),
                     available_toppings=item.get("available_toppings", []),

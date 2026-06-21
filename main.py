@@ -306,6 +306,26 @@ def main() -> None:
         "--host", type=str, default="0.0.0.0", help="Host to bind to"
     )
 
+    # ── Manage-menu subcommand ────────────────────────────────────────────
+    menu_parser = sub.add_parser("manage-menu", help="Edit a restaurant menu")
+    menu_parser.add_argument(
+        "action",
+        help="Action: set-price, 86 (out-of-stock), un86 (in-stock), describe",
+    )
+    menu_parser.add_argument("item_id", help="Menu item ID (e.g. pizza_margherita)")
+    menu_parser.add_argument(
+        "value", nargs="?", default=None,
+        help="New price (for set-price) or description text (for describe)",
+    )
+    menu_parser.add_argument(
+        "--variant", default=None,
+        help="Size/variant (e.g. large). Only for sized items.",
+    )
+    menu_parser.add_argument(
+        "--restaurant", default=None,
+        help="Restaurant ID (defaults to first in restaurants.json)",
+    )
+
     args = parser.parse_args()
 
     # Default to CLI if no subcommand given
@@ -357,6 +377,62 @@ def main() -> None:
             print("\n\n💡 Session interrupted. Goodbye!")
     elif args.command == "server":
         _run_server(args, config)
+    elif args.command == "manage-menu":
+        _run_manage_menu(args, config)
+
+
+def _run_manage_menu(args, config: AppConfig) -> None:
+    """Parse CLI args and call manage_menu."""
+    from menu_manager import MenuAction, manage_menu
+
+    # Normalize action aliases
+    action = args.action.replace("-", "_")
+    if action == "86":
+        action = "out_of_stock"
+    elif action == "un86":
+        action = "in_stock"
+
+    # Resolve restaurant
+    from restaurant import RestaurantRegistry
+    registry = RestaurantRegistry(config.restaurants_path)
+    if args.restaurant:
+        ctx = registry.get_by_id(args.restaurant)
+        if ctx is None:
+            print(f"❌ Restaurant '{args.restaurant}' not found.")
+            sys.exit(1)
+    else:
+        try:
+            ctx = registry.get_default()
+        except ValueError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+
+    # Parse value
+    value = args.value
+    if action == "set_price" and value is not None:
+        try:
+            value = float(value)
+        except ValueError:
+            print(f"❌ Invalid price: '{value}'. Must be a number.")
+            sys.exit(1)
+
+    actions = [
+        MenuAction(
+            action=action,
+            item_id=args.item_id,
+            variant_id=args.variant,
+            value=value,
+        )
+    ]
+
+    result = manage_menu(ctx.config.menu_path, actions)
+    if result.success:
+        print(f"✅ {result.message}")
+    else:
+        print(f"❌ {result.message}")
+        for err in result.errors:
+            print(f"   - {err}")
+        sys.exit(1)
 
 
 def _run_server(args, config: AppConfig) -> None:
