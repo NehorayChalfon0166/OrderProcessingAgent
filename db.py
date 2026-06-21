@@ -33,15 +33,12 @@ logger = logging.getLogger(__name__)
 # Peewee models
 # ---------------------------------------------------------------------------
 
-# The database handle is set at connection time by Database.__init__
-_db_handle: SqliteDatabase | None = None
-
 
 class BaseModel(Model):
-    """Base model that binds to the shared database handle."""
+    """Base model — database is bound at runtime by Database.__init__."""
 
     class Meta:
-        database = _db_handle  # type: ignore[assignment]
+        database = None  # type: ignore[assignment] — set by Database.__init__
 
 
 class SessionRow(BaseModel):
@@ -99,19 +96,18 @@ class Database:
     """
 
     def __init__(self, path: str = "order_agent.db") -> None:
-        global _db_handle
         self._path = path
 
-        _db_handle = SqliteDatabase(path, pragmas={
+        self._db = SqliteDatabase(path, pragmas={
             "journal_mode": "wal",
             "foreign_keys": 1,
         })
-        _db_handle.connect()
+        self._db.connect()
 
-        # Bind models to this database
-        BaseModel._meta.database = _db_handle
-        SessionRow._meta.database = _db_handle
-        OrderRow._meta.database = _db_handle
+        # Bind models to this database instance
+        BaseModel._meta.database = self._db
+        SessionRow._meta.database = self._db
+        OrderRow._meta.database = self._db
 
         self._create_tables()
         self._migrate_if_needed()
@@ -242,7 +238,7 @@ class Database:
 
     def _create_tables(self) -> None:
         """Create tables if they don't exist."""
-        _db_handle.create_tables([SessionRow, OrderRow], safe=True)
+        self._db.create_tables([SessionRow, OrderRow], safe=True)
 
     def _migrate_if_needed(self) -> None:
         """One-time migration from legacy JSON files."""
