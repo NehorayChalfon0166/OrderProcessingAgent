@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _db: Database | None = None
 _registry: RestaurantRegistry | None = None
 _api_token: str = ""
+_restaurants_path: str = "restaurants.json"
 _templates: Jinja2Templates | None = None
 
 app = FastAPI(title="Order Processing Agent — Dashboard")
@@ -38,10 +39,11 @@ if _static_dir.exists():
 
 
 def init_dashboard(config: AppConfig) -> None:
-    global _db, _registry, _api_token, _templates
+    global _db, _registry, _api_token, _templates, _restaurants_path
     _db = Database(config.db_path)
     _registry = RestaurantRegistry(config.restaurants_path)
     _api_token = config.api_token
+    _restaurants_path = config.restaurants_path
     _templates = Jinja2Templates(directory=str(_dashboard_dir / "dashboard_templates"))
     if not _api_token:
         logger.warning("API_TOKEN not set — dashboard open without auth")
@@ -170,6 +172,37 @@ async def edit_menu(request: Request, restaurant_id: str):
     if result.success:
         return HTMLResponse(f"<p style='color:green'>✅ {result.message}</p>")
     return HTMLResponse("<p style='color:red'>" + "<br>".join(result.errors) + "</p>", status_code=400)
+
+
+@app.get("/restaurants", response_class=HTMLResponse)
+async def list_restaurants(request: Request):
+    _check_token(request)
+    assert _registry is not None
+    configs = _registry.list_restaurants()
+    assert _db is not None
+    stats = []
+    for r in configs:
+        orders = _db.get_orders(r.id, limit=30)
+        unprinted = _db.get_unprinted_orders(r.id)
+        stats.append({"config": r, "order_count": len(orders), "unprinted_count": len(unprinted)})
+    return _render(request, "restaurants.html", stats=stats)
+
+
+@app.post("/restaurants/add")
+async def add_restaurant(request: Request):
+    _check_token(request)
+    assert _registry is not None
+    from restaurant import save_restaurant
+    form = await request.form()
+    rid = str(form.get("restaurant_id", ""))
+    name = str(form.get("name", ""))
+    phone = str(form.get("phone", ""))
+    owner = str(form.get("owner", ""))
+    try:
+        msg = save_restaurant(_restaurants_path, rid, name=name, twilio_phone=phone, owner_phone=owner)
+        return HTMLResponse(f"<p style='color:green'>✅ {msg}</p>")
+    except (ValueError, FileNotFoundError) as e:
+        return HTMLResponse(f"<p style='color:red'>❌ {e}</p>", status_code=400)
 
 
 @app.get("/health")

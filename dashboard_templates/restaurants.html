@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Restaurants{% endblock %}
+{% block content %}
+<h1>Restaurants</h1>
+
+{% for s in stats %}
+<article>
+  <hgroup><h2>{{ s.config.name }}</h2><small><code>{{ s.config.id }}</code> — {{ s.config.twilio_phone }}</small></hgroup>
+  <div class="stats-grid">
+    <div class="stat"><strong>{{ s.order_count }}</strong><small>Recent Orders</small></div>
+    <div class="stat"><strong>{{ s.unprinted_count }}</strong><small>Unprinted</small></div>
+  </div>
+  <p>Owner: {{ s.config.owner_phone }} | Menu: <code>{{ s.config.menu_path }}</code></p>
+  <a href="/menu/{{ s.config.id }}{{ token_url }}" role="button" class="secondary">Edit Menu</a>
+  <a href="/orders{{ token_url }}&restaurant_id={{ s.config.id }}" role="button" class="secondary">View Orders</a>
+</article>
+{% endfor %}
+
+<article>
+  <h2>Add Restaurant</h2>
+  <form hx-post="/restaurants/add{{ token_url }}" hx-target="#add-result" hx-swap="innerHTML">
+    <label>Slug <input name="restaurant_id" placeholder="marios_pizzeria" required></label>
+    <label>Name <input name="name" placeholder="Mario's Pizzeria" required></label>
+    <label>Twilio Phone <input name="phone" placeholder="+1234567890" required></label>
+    <label>Owner Phone <input name="owner" placeholder="+1234567890" required></label>
+    <button type="submit">Add Restaurant</button>
+  </form>
+  <div id="add-result"></div>
+</article>
+
+<p><small>⚠️ Changes require server restart to take effect.</small></p>
+{% endblock %}
