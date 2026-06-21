@@ -160,12 +160,30 @@ filesystem. No change needed.
 
 ---
 
-## N2, N3, N5 — Deferred ⬜
+## N2 — Remove `_db_handle` global 🟢
 
-**N2** (`_db_handle` global in db.py): Works for single-process. Refactor later.
-**N3** (dual persistence JSON+DB): Intentional design. Remove JSON fallback
-after SQLite proven in production.
-**N5** (structured logging): Not needed for first go-live.
+**Resolution:** `Database` now owns its connection as `self._db` instance
+attribute. No more module-level global. Each instance is self-contained.
+**Commit:** `d753eda` (master)
+
+---
+
+## N3 — Remove JSON persistence fallback 🟢
+
+**Resolution:** `session.save()` now requires `_db` to be set. Removed
+`OrderSession.load()` classmethod. `SessionRouter` no longer takes `sessions_dir`;
+`db` is required in `get_or_create()`. `process_turn()` no longer takes
+`sessions_dir`. All persistence goes through SQLite.
+**Commit:** `db6120e` (master), `47ef765` (integration follow-up)
+
+---
+
+## N5 — Structured logging 🟢
+
+**Resolution:** Added `log_json` config field (`LOG_JSON` env var). When enabled,
+logs emit JSON via `python-json-logger`. Added request ID middleware to server
+for log correlation. Defaults to plain text for dev.
+**Commit:** `7fd5787` (master), `fa8a578` (integration middleware)
 
 ---
 
