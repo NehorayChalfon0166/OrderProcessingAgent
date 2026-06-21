@@ -306,6 +306,15 @@ def main() -> None:
         "--host", type=str, default="0.0.0.0", help="Host to bind to"
     )
 
+    # ── Dashboard subcommand ──────────────────────────────────────────────
+    dash_parser = sub.add_parser("dashboard", help="Start admin dashboard")
+    dash_parser.add_argument(
+        "--port", type=int, default=8081, help="Port to listen on (default: 8081)"
+    )
+    dash_parser.add_argument(
+        "--host", type=str, default="0.0.0.0", help="Host to bind to"
+    )
+
     # ── Manage-menu subcommand ────────────────────────────────────────────
     menu_parser = sub.add_parser("manage-menu", help="Edit a restaurant menu")
     menu_parser.add_argument(
@@ -377,8 +386,29 @@ def main() -> None:
             print("\n\n💡 Session interrupted. Goodbye!")
     elif args.command == "server":
         _run_server(args, config)
+    elif args.command == "dashboard":
+        _run_dashboard(args, config)
     elif args.command == "manage-menu":
         _run_manage_menu(args, config)
+
+
+def _run_dashboard(args, config: AppConfig) -> None:
+    """Start the admin dashboard server."""
+    from dashboard import init_dashboard
+
+    if not config.api_token:
+        print(
+            "⚠️  API_TOKEN is not set — dashboard will be accessible without "
+            "authentication.\n"
+            "   Set API_TOKEN in .env to enable token-based auth."
+        )
+
+    init_dashboard(config)
+
+    import uvicorn
+
+    print(f"📊 Starting dashboard on http://{args.host}:{args.port}")
+    uvicorn.run("dashboard:app", host=args.host, port=args.port, reload=False)
 
 
 def _run_manage_menu(args, config: AppConfig) -> None:
