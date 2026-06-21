@@ -58,13 +58,21 @@ def _check_token(request: Request) -> None:
 
 
 def _token_url(request: Request) -> str:
-    token = request.query_params.get("token", "")
-    return f"?token={token}" if token else ""
+    """Return ?token=xxx for appending to URLs, or empty string."""
+    t = request.query_params.get("token", "")
+    return f"?token={t}" if t else ""
 
 
 def _render(request: Request, name: str, **ctx) -> HTMLResponse:
     assert _templates is not None
-    return _templates.TemplateResponse(request, name, {"request": request, "token_url": _token_url(request), "registry": _registry, **ctx})
+    raw_token = request.query_params.get("token", "")
+    return _templates.TemplateResponse(request, name, {
+        "request": request,
+        "token_url": _token_url(request),
+        "token": raw_token,
+        "registry": _registry,
+        **ctx,
+    })
 
 
 @app.get("/", response_class=HTMLResponse)
