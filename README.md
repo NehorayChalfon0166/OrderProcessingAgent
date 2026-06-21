@@ -84,17 +84,20 @@ BUILDING → REVIEW → PAYMENT_PENDING → COMPLETED
 ├── catalogue.py         # Menu loading, fuzzy matching, deals
 ├── pricing.py           # Python-owned pricing engine
 ├── config.py            # Env-var configuration
+├── db.py                # SQLite persistence (Peewee ORM)
+├── payment.py           # Stripe checkout + webhook verification
+├── printer.py           # ESC/POS thermal printer formatting
 ├── docs/                # Component + architecture documentation
-├── tests/               # Full pytest suite (233 tests)
-├── sessions/            # Live session files (per-restaurant subdirs)
+├── tests/               # Full pytest suite (197 tests)
+├── menus/               # One menu JSON file per restaurant
 └── orders/              # Completed order JSONs (per-restaurant subdirs)
 ```
 
-**Integration branches** (I/O layer only, rebase on master):
+**Integration branch** (`twilio-integration` — I/O layer, rebases on master):
 ```
-├── server.py            # FastAPI Twilio WhatsApp webhook (twilio-integration)
-├── twilio_client.py     # Twilio REST API wrapper (twilio-integration)
-├── .githooks/           # Pre-commit hook enforcing branch rules
+├── server.py            # FastAPI Twilio WhatsApp webhook
+├── twilio_client.py     # Twilio REST API wrapper
+└── .githooks/           # Pre-commit hook enforcing branch rules
 ```
 
 ## Key Design Decisions

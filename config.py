@@ -43,6 +43,9 @@ class AppConfig:
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
 
+    # Printer agent API (used by integration branches, harmless on master)
+    api_token: str = ""
+
     # Debug
     debug: bool = False
 
@@ -70,6 +73,7 @@ class AppConfig:
             ),
             stripe_secret_key=os.getenv("STRIPE_SECRET_KEY", ""),
             stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET", ""),
+            api_token=os.getenv("API_TOKEN", ""),
             debug=os.getenv("DEBUG", "false").lower() == "true",
         )
 

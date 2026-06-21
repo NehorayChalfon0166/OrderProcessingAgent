@@ -2,7 +2,7 @@
 
 Status: **SETTLED**
 
-Evolution of v1's `menu_manager.py`. Fuzzy matching stays. Menu-in-prompt goes. Deals become first-class.
+Evolution of v1's `menu_manager.py` (now `catalogue.py`). Fuzzy matching stays. Menu-in-prompt goes. Deals become first-class.
 
 ## Data Classes
 

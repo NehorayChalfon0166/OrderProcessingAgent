@@ -48,13 +48,6 @@ def build_system_prompt(
     )
 
 
-# Backward-compatible aliases — kept so existing imports don't break.
-# Both point to the unified prompt since the loop pattern uses one prompt
-# for all iterations.
-build_tool_prompt = build_system_prompt
-build_response_prompt = build_system_prompt
-
-
 def _format_cart(session: OrderSession) -> str:
     """Format current cart as text for the system prompt."""
     if not session.cart:

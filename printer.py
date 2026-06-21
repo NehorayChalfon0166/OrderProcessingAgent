@@ -11,7 +11,7 @@ the bytes to send — how they reach the printer is the agent's concern.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 # ---------------------------------------------------------------------------

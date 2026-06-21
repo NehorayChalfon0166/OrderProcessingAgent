@@ -345,6 +345,17 @@ def main() -> None:
 
 def _run_server(args, config: AppConfig) -> None:
     """Validate Twilio config and start the FastAPI server."""
+    try:
+        import server  # noqa: F401 — lives on twilio-integration branch
+    except ImportError:
+        print(
+            "❌ Server mode requires the twilio-integration branch.\n"
+            "   The server.py module is not on master — it lives on the\n"
+            "   twilio-integration branch alongside twilio_client.py.\n"
+            "   Check out that branch and try again."
+        )
+        sys.exit(1)
+
     if not config.twilio_account_sid:
         print("❌ TWILIO_ACCOUNT_SID is required for server mode.")
         sys.exit(1)

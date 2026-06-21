@@ -48,8 +48,8 @@ No mention of `<invoke>`, tool-call syntax, or XML tags. In the loop pattern,
 the model always has access to the legitimate `tool_calls` channel — there's
 no forbidden path it needs to hack around via text.
 
-`build_tool_prompt` and `build_response_prompt` are kept as backward-compatible
-aliases for `build_system_prompt`.
+The unified `build_system_prompt` is the single entry point — the loop pattern
+uses one prompt for all iterations.
 
 ## Helper Functions
 
