@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import time as _time_module
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -214,6 +215,16 @@ def _notify_restaurant(session, restaurant_ctx: RestaurantContext) -> None:
 
 
 app = FastAPI(title="Order Processing Agent — Twilio", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def _add_request_id(request: Request, call_next):
+    """Attach a unique request ID to every response for log correlation."""
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 @app.get("/health")
