@@ -290,12 +290,15 @@ with tempfile.TemporaryDirectory() as tmpdir:
     check("add_user_message works", len(s.conversation) == 1)
     check("message role is USER", s.conversation[0].role == MessageRole.USER)
 
-    # save/load
-    sessions_dir = str(tmp / "sessions")
+    # save/load via Database
+    from db import Database
+    db = Database(str(tmp / "test.db"))
+    s._db = db  # type: ignore[has-type]
+    s.restaurant_id = "rest_a"
     s.cart = [priced]
-    s.save(sessions_dir)
-    loaded = OrderSession.load(s.session_id, sessions_dir)
-    check("session save/load roundtrip", loaded.session_id == s.session_id)
+    s.save()
+    loaded = db.load_session(s.restaurant_id, s.session_id)
+    check("session save/load roundtrip", loaded is not None and loaded.session_id == s.session_id)
     check("cart preserved after load", len(loaded.cart) == 1)
     check("cart item preserved", loaded.cart[0].product_id == "pizza_margherita")
 
@@ -496,13 +499,13 @@ with tempfile.TemporaryDirectory() as tmpdir:
     # --- Session isolation: same phone, different restaurants ---
     print("\n-- Session isolation --")
     from session_router import SessionRouter
-    from pathlib import Path
+    from db import Database
 
-    sessions_dir = str(tmp / "sessions")
-    router = SessionRouter(sessions_dir)
+    db2 = Database(str(tmp / "iso_test.db"))
+    router = SessionRouter()
 
-    s_a = router.get_or_create("rest_a", "+972539534345")
-    s_b = router.get_or_create("rest_b", "+972539534345")
+    s_a = router.get_or_create("rest_a", "+972539534345", db2)
+    s_b = router.get_or_create("rest_b", "+972539534345", db2)
 
     check("same session_id (phone digits)", s_a.session_id == s_b.session_id == "972539534345")
     check("different restaurant_id", s_a.restaurant_id != s_b.restaurant_id)
@@ -515,33 +518,31 @@ with tempfile.TemporaryDirectory() as tmpdir:
         product_id="test_item", name="Test Item", category="Test",
         base_price=10.0, line_total=10.0,
     ))
-    s_a.save(str(Path(sessions_dir) / "rest_a"))
+    s_a.save()
 
     # Reload and verify isolation
-    s_a2 = router.get_or_create("rest_a", "+972539534345")
-    s_b2 = router.get_or_create("rest_b", "+972539534345")
+    s_a2 = router.get_or_create("rest_a", "+972539534345", db2)
+    s_b2 = router.get_or_create("rest_b", "+972539534345", db2)
     check("rest_a session has item", len(s_a2.cart) == 1)
     check("rest_b session is empty", len(s_b2.cart) == 0)
 
-    # Verify file paths
-    check("rest_a session file exists",
-          (Path(sessions_dir) / "rest_a" / "972539534345.json").exists())
-    check("rest_b session file exists",
-          (Path(sessions_dir) / "rest_b" / "972539534345.json").exists())
+    # Verify DB persistence
+    check("rest_a session in DB", db2.load_session("rest_a", "972539534345") is not None)
+    check("rest_b session in DB", db2.load_session("rest_b", "972539534345") is not None)
 
     # --- SessionRouter: terminal state per restaurant ---
     print("\n-- SessionRouter: terminal state handling --")
     from models import OrderState
 
-    s_term = router.get_or_create("rest_a", "+972531111111")
+    s_term = router.get_or_create("rest_a", "+972531111111", db2)
     s_term.cart.append(CI(
         product_id="old", name="Old Item", category="Test",
         base_price=5.0, line_total=5.0,
     ))
     s_term.state = OrderState.COMPLETED
-    s_term.save(str(Path(sessions_dir) / "rest_a"))
+    s_term.save()
 
-    s_new = router.get_or_create("rest_a", "+972531111111")
+    s_new = router.get_or_create("rest_a", "+972531111111", db2)
     check("terminal session replaced with fresh", s_new.state == OrderState.BUILDING)
     check("fresh session has empty cart", len(s_new.cart) == 0)
     check("fresh session keeps same session_id", s_new.session_id == "972531111111")
@@ -579,21 +580,14 @@ with tempfile.TemporaryDirectory() as tmpdir:
     except Exception:
         check("config is frozen (immutable)", True)
 
-    # --- process_turn sessions_dir parameter ---
-    print("\n-- process_turn sessions_dir parameter --")
+    # --- process_turn signature ---
+    print("\n-- process_turn signature --")
     from agent_loop import process_turn
-    from session import OrderSession as OS
-
-    test_session = OS(restaurant_id="rest_a")
-    test_session.session_id = "test123"
-    test_sessions_dir = str(tmp / "sessions_processturn_test")
-
-    # We can't fully test process_turn without an LLM, but we can verify
-    # that the sessions_dir parameter is accepted and the session save
-    # uses the correct directory when process_turn saves internally
-    # (which happens when max iterations are hit or the LLM responds)
-    check("process_turn accepts sessions_dir (signature check)",
-          True)  # If we got here without import errors, the signature works
+    import inspect
+    sig = inspect.signature(process_turn)
+    params = list(sig.parameters.keys())
+    check("process_turn takes session, user_message, catalogue, pricing, llm_client",
+          params == ["session", "user_message", "catalogue", "pricing", "llm_client"])
 
 
 # =============================================================================
@@ -667,8 +661,10 @@ with tempfile.TemporaryDirectory() as tmpdir:
     # --- Edge: sessions with special characters in phone ---
     print("\n-- Edge: session phone sanitization --")
     from session_router import SessionRouter
-    router = SessionRouter(str(tmp / "sessions_edge"))
-    s = router.get_or_create("rest_a", "whatsapp:+972 (53) 953-4345")
+    from db import Database as DBEdge
+    db_edge = DBEdge(str(tmp / "edge_test.db"))
+    router = SessionRouter()
+    s = router.get_or_create("rest_a", "whatsapp:+972 (53) 953-4345", db_edge)
     check("sanitized phone as session_id", s.session_id == "972539534345")
 
     # --- Edge: chained restaurant IDs ---

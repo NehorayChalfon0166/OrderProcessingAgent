@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Order Processing Agent — CLI Entry Point.
+"""Order Processing Agent — CLI and Server Entry Point.
 
 A tool-calling AI agent for processing restaurant orders.
-Run this file to start an interactive ordering session via the terminal.
 
 Usage:
-    python main.py
-    python main.py --debug
+    python main.py cli           # interactive terminal session
+    python main.py server        # start Twilio WhatsApp webhook server
+    python main.py --debug cli   # debug logging
 """
 
 from __future__ import annotations
@@ -156,7 +156,6 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
     pricing = ctx.pricing
     llm_client = LLMClient(config)
     db = Database(config.db_path)
-    sessions_dir = f"{config.sessions_dir}/{ctx.config.id}"
 
     # Create session
     session = OrderSession(restaurant_id=ctx.config.id)
@@ -168,7 +167,6 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
     try:
         greeting = process_turn(
             session, "Hi", catalogue, pricing, llm_client,
-            sessions_dir=sessions_dir,
         )
         print_agent(greeting)
     except Exception as e:
@@ -208,7 +206,6 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
             try:
                 greeting = process_turn(
                     session, "Hi", catalogue, pricing, llm_client,
-                    sessions_dir=sessions_dir,
                 )
                 print_agent(greeting)
             except Exception:
@@ -219,7 +216,6 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
         try:
             response = process_turn(
                 session, user_input, catalogue, pricing, llm_client,
-                sessions_dir=sessions_dir,
             )
             print_agent(response)
         except Exception as e:
@@ -256,7 +252,7 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="AI Order Processing Agent — CLI Interface"
+        description="AI Order Processing Agent"
     )
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug logging"

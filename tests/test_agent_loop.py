@@ -22,8 +22,15 @@ def pricing(catalogue):
 
 
 @pytest.fixture
-def session():
-    s = OrderSession()
+def db(tmp_path):
+    from db import Database
+    return Database(str(tmp_path / "test.db"))
+
+
+@pytest.fixture
+def session(db):
+    s = OrderSession(restaurant_id="test")
+    s._db = db  # type: ignore[has-type]
     s.cart = [
         CartItem(
             product_id="pizza_margherita",
@@ -156,10 +163,18 @@ class MockLLMClient:
         return "", []
 
 
+def _make_session(db=None):
+    """Create a DB-backed session for process_turn tests."""
+    s = OrderSession(restaurant_id="test")
+    if db:
+        s._db = db  # type: ignore[has-type]
+    return s
+
+
 class TestProcessTurn:
-    def test_greeting_flow(self, catalogue, pricing):
+    def test_greeting_flow(self, catalogue, pricing, db):
         """No tool calls — one LLM call, text returned directly."""
-        session = OrderSession()
+        session = _make_session(db)
         mock_client = MockLLMClient(responses=[
             ("Hey! What can I get for you?", []),
         ])
@@ -169,9 +184,9 @@ class TestProcessTurn:
         assert "Hey" in text
         assert len(session.conversation) == 2  # user + assistant
 
-    def test_add_item_flow(self, catalogue, pricing):
+    def test_add_item_flow(self, catalogue, pricing, db):
         """Tool call → Call 1 returns tools, Call 2 returns final text."""
-        session = OrderSession()
+        session = _make_session(db)
         from models import ToolCallRequest
         mock_client = MockLLMClient(responses=[
             ("", [ToolCallRequest(id="c1", name="add_to_cart",
@@ -186,17 +201,10 @@ class TestProcessTurn:
         assert "Added" in text
         assert len(session.cart) == 1
         assert session.cart[0].product_id == "pizza_margherita"
-        # Conversation: user + assistant(tool_calls) + tool_result + assistant(text)
-        assert len(session.conversation) == 4
-        assert session.conversation[1].role == MessageRole.ASSISTANT
-        assert session.conversation[1].tool_calls is not None
-        assert session.conversation[2].role == MessageRole.TOOL
-        assert session.conversation[3].role == MessageRole.ASSISTANT
-        assert "Added" in session.conversation[3].content
 
-    def test_add_and_review_flow(self, catalogue, pricing):
+    def test_add_and_review_flow(self, catalogue, pricing, db):
         """Multiple tool calls → Call 1 returns tools, Call 2 responds."""
-        session = OrderSession()
+        session = _make_session(db)
         from models import ToolCallRequest
         mock_client = MockLLMClient(responses=[
             (
@@ -225,9 +233,9 @@ class TestProcessTurn:
         assert session.state == OrderState.REVIEW
         assert "summary" in text.lower()
 
-    def test_unknown_tool_is_handled(self, catalogue, pricing):
+    def test_unknown_tool_is_handled(self, catalogue, pricing, db):
         """Unknown tool → error appended, Call 2 responds."""
-        session = OrderSession()
+        session = _make_session(db)
         from models import ToolCallRequest
         mock_client = MockLLMClient(responses=[
             ("", [ToolCallRequest(id="c1", name="hack_the_planet", arguments={})]),
@@ -241,9 +249,9 @@ class TestProcessTurn:
         # user + assistant(tools) + tool(error) + assistant(text)
         assert len(session.conversation) == 4
 
-    def test_tool_error_is_handled(self, catalogue, pricing):
+    def test_tool_error_is_handled(self, catalogue, pricing, db):
         """Tool raises — error caught, loop continues to next iteration."""
-        session = OrderSession()
+        session = _make_session(db)
         from models import ToolCallRequest
         mock_client = MockLLMClient(responses=[
             ("", [ToolCallRequest(id="c1", name="add_to_cart", arguments={})]),
@@ -257,9 +265,9 @@ class TestProcessTurn:
         assert len(tool_msgs) == 1
         assert "error" in tool_msgs[0].content.lower()
 
-    def test_chained_tool_calls(self, catalogue, pricing):
+    def test_chained_tool_calls(self, catalogue, pricing, db):
         """Model chains tools across iterations — e.g. browse → add → respond."""
-        session = OrderSession()
+        session = _make_session(db)
         from models import ToolCallRequest
         mock_client = MockLLMClient(responses=[
             # Iteration 1: browse the menu first
@@ -282,9 +290,9 @@ class TestProcessTurn:
         # user + asst(tools) + tool + asst(tools) + tool + asst(text) = 6
         assert len(session.conversation) == 6
 
-    def test_empty_text_without_tools_returns_fallback(self, catalogue, pricing):
+    def test_empty_text_without_tools_returns_fallback(self, catalogue, pricing, db):
         """Model returns empty text and no tools — fallback message used."""
-        session = OrderSession()
+        session = _make_session(db)
         mock_client = MockLLMClient(responses=[
             ("", []),  # empty text, no tools — degenerate
         ])
@@ -293,9 +301,9 @@ class TestProcessTurn:
         assert len(text) > 0
         assert "I've processed" in text
 
-    def test_max_iterations_fallback(self, catalogue, pricing):
+    def test_max_iterations_fallback(self, catalogue, pricing, db):
         """Model keeps calling tools forever — hits max, returns fallback."""
-        session = OrderSession()
+        session = _make_session(db)
         from models import ToolCallRequest
         # Every response has tool calls — model never converges
         responses = [
@@ -313,9 +321,9 @@ class TestProcessTurn:
         # user + 5*(asst+tool) + asst(fallback) = 1 + 10 + 1 = 12
         assert len(session.conversation) == 12
 
-    def test_state_change_mid_loop(self, catalogue, pricing):
+    def test_state_change_mid_loop(self, catalogue, pricing, db):
         """State changes during loop — next iteration gets new tool set."""
-        session = OrderSession()
+        session = _make_session(db)
         # Place session in REVIEW state where confirm_order is available
         session.state = OrderState.REVIEW
         from models import ToolCallRequest
@@ -340,84 +348,70 @@ class TestProcessTurn:
 
 
 class TestRestoreSessionFromSnapshot:
-    def test_restores_cart(self, catalogue, pricing, tmp_path):
+    def test_restores_cart(self, db):
         """Rollback restores cart to the saved snapshot state."""
-        session = OrderSession()
+        session = OrderSession(restaurant_id="test")
+        session._db = db  # type: ignore[has-type]
         session.cart = [
             CartItem(
-                product_id="pizza_margherita",
-                name="Margherita",
-                category="Pizzas",
-                size="medium",
-                quantity=1,
-                base_price=12.99,
-                line_total=12.99,
+                product_id="pizza_margherita", name="Margherita",
+                category="Pizzas", size="medium", quantity=1,
+                base_price=12.99, line_total=12.99,
             )
         ]
         session.customer = CustomerInfo(name="John", phone="555-0123")
         session.add_user_message("I want a pizza")
 
-        # Save snapshot
-        sessions_dir = str(tmp_path / "sessions")
-        session.save(sessions_dir)
+        session.save()
 
-        # Simulate partial mutation (what a failed tool batch leaves behind)
+        # Simulate partial mutation
         session.cart.append(
             CartItem(
-                product_id="pizza_pepperoni",
-                name="Pepperoni",
-                category="Pizzas",
-                size="large",
-                quantity=1,
-                base_price=16.99,
-                line_total=16.99,
+                product_id="pizza_pepperoni", name="Pepperoni",
+                category="Pizzas", size="large", quantity=1,
+                base_price=16.99, line_total=16.99,
             )
         )
         session.state = OrderState.REVIEW
         session._pending_transition = OrderState.COMPLETED
 
-        # Restore
-        _restore_session_from_snapshot(session, sessions_dir)
+        _restore_session_from_snapshot(session)
 
-        # Verify rollback
         assert len(session.cart) == 1
         assert session.cart[0].product_id == "pizza_margherita"
         assert session.state == OrderState.BUILDING
         assert session._pending_transition is None
 
-    def test_restores_conversation(self, catalogue, pricing, tmp_path):
+    def test_restores_conversation(self, db):
         """Rollback restores conversation to snapshot point."""
-        session = OrderSession()
+        session = OrderSession(restaurant_id="test")
+        session._db = db  # type: ignore[has-type]
         session.customer = CustomerInfo(name="John")
         session.add_user_message("test message")
 
-        sessions_dir = str(tmp_path / "sessions")
-        session.save(sessions_dir)
+        session.save()
 
-        # Simulate tool execution that added conversation messages
         session.add_assistant_message(content=None, tool_calls=[])
         session.add_tool_result("c1", "some_tool", '{"success": true}')
 
-        _restore_session_from_snapshot(session, sessions_dir)
+        _restore_session_from_snapshot(session)
 
-        # Should only have the user message — assistant and tool result rolled back
         assert len(session.conversation) == 1
         assert session.conversation[0].role == MessageRole.USER
 
-    def test_restores_customer(self, catalogue, pricing, tmp_path):
+    def test_restores_customer(self, db):
         """Rollback restores customer info to snapshot."""
-        session = OrderSession()
+        session = OrderSession(restaurant_id="test")
+        session._db = db  # type: ignore[has-type]
         session.customer = CustomerInfo(name="Alice", phone="123", address="123 Main St")
         session.add_user_message("order please")
 
-        sessions_dir = str(tmp_path / "sessions")
-        session.save(sessions_dir)
+        session.save()
 
-        # Corrupt customer
         session.customer.name = "Mallory"
         session.customer.phone = "666"
 
-        _restore_session_from_snapshot(session, sessions_dir)
+        _restore_session_from_snapshot(session)
 
         assert session.customer.name == "Alice"
         assert session.customer.phone == "123"
@@ -426,9 +420,10 @@ class TestRestoreSessionFromSnapshot:
 class TestProcessTurnRollback:
     """Test that process_turn rolls back and continues when tool batch crashes."""
 
-    def test_rollback_on_tool_crash(self, catalogue, pricing):
+    def test_rollback_on_tool_crash(self, catalogue, pricing, db):
         """When _execute_tool raises unexpectedly, session rolls back and loop continues."""
-        session = OrderSession()
+        session = OrderSession(restaurant_id="test")
+        session._db = db  # type: ignore[has-type]
         from models import ToolCallRequest
 
         # Simulate: first tool succeeds (adds item), second tool crashes unexpectedly

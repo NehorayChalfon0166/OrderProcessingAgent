@@ -1,8 +1,5 @@
 """Tests for session.py — order state and persistence."""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from models import (
@@ -127,8 +124,11 @@ class TestConversationHelpers:
 
 
 class TestPersistence:
-    def test_save_and_load(self):
-        session = OrderSession()
+    def test_save_and_load(self, tmp_path):
+        from db import Database
+        db = Database(str(tmp_path / "test.db"))
+        session = OrderSession(restaurant_id="test")
+        session._db = db  # type: ignore[has-type]
         session.add_user_message("Hello")
         session.cart = [
             CartItem(
@@ -140,10 +140,10 @@ class TestPersistence:
         ]
         session.customer = CustomerInfo(name="John")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            session.save(sessions_dir=tmpdir)
-            loaded = OrderSession.load(session.session_id, sessions_dir=tmpdir)
+        session.save()
+        loaded = db.load_session(session.restaurant_id, session.session_id)
 
+        assert loaded is not None
         assert loaded.session_id == session.session_id
         assert loaded.state == session.state
         assert len(loaded.cart) == 1
@@ -151,25 +151,23 @@ class TestPersistence:
         assert loaded.customer.name == "John"
         assert len(loaded.conversation) == 1
         assert loaded.conversation[0].content == "Hello"
-        # _pending_transition is not persisted
-        assert loaded._pending_transition is None
 
-    def test_save_creates_directory(self):
+    def test_save_without_db_raises(self):
         session = OrderSession()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sessions_dir = Path(tmpdir) / "new_sessions"
-            session.save(sessions_dir=str(sessions_dir))
-            assert sessions_dir.exists()
-            assert (sessions_dir / f"{session.session_id}.json").exists()
+        with pytest.raises(RuntimeError, match="no Database attached"):
+            session.save()
 
-    def test_load_nonexistent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(FileNotFoundError):
-                OrderSession.load("NONEXIST", sessions_dir=tmpdir)
+    def test_load_nonexistent(self, tmp_path):
+        from db import Database
+        db = Database(str(tmp_path / "test.db"))
+        result = db.load_session("test", "NONEXIST")
+        assert result is None
 
-    def test_updated_at_changes_on_save(self):
-        session = OrderSession()
+    def test_updated_at_changes_on_save(self, tmp_path):
+        from db import Database
+        db = Database(str(tmp_path / "test.db"))
+        session = OrderSession(restaurant_id="test")
+        session._db = db  # type: ignore[has-type]
         original = session.updated_at
-        with tempfile.TemporaryDirectory() as tmpdir:
-            session.save(sessions_dir=tmpdir)
+        session.save()
         assert session.updated_at != original

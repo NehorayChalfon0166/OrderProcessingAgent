@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, PrivateAttr
@@ -134,33 +133,16 @@ class OrderSession(BaseModel):
     # Persistence
     # ------------------------------------------------------------------
 
-    def save(self, sessions_dir: str = "sessions") -> Path:
-        """Persist session state.
-
-        Uses the attached Database if available, otherwise falls back to
-        writing a JSON file to *sessions_dir*.
-        """
-        self.updated_at = datetime.now(tz=timezone.utc).isoformat()
-
-        if self._db is not None:
-            self._db.save_session(self)
-            return Path()  # no file path when DB-backed
-
-        # JSON fallback
-        dir_path = Path(sessions_dir)
-        dir_path.mkdir(parents=True, exist_ok=True)
-        filepath = dir_path / f"{self.session_id}.json"
-        filepath.write_text(self.model_dump_json(indent=2), encoding="utf-8")
-        return filepath
-
-    @classmethod
-    def load(cls, session_id: str, sessions_dir: str = "sessions") -> "OrderSession":
-        """Load a session from a JSON file.
+    def save(self) -> None:
+        """Persist session state via the attached Database.
 
         Raises:
-            FileNotFoundError: If the session file doesn't exist.
+            RuntimeError: If no Database is attached to this session.
         """
-        filepath = Path(sessions_dir) / f"{session_id}.json"
-        if not filepath.exists():
-            raise FileNotFoundError(f"Session not found: {filepath}")
-        return cls.model_validate_json(filepath.read_text(encoding="utf-8"))
+        if self._db is None:
+            raise RuntimeError(
+                "Cannot save session — no Database attached. "
+                "Set session._db to a Database instance before saving."
+            )
+        self.updated_at = datetime.now(tz=timezone.utc).isoformat()
+        self._db.save_session(self)

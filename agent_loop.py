@@ -33,12 +33,14 @@ def process_turn(
     catalogue: Catalogue,
     pricing: PricingEngine,
     llm_client: LLMClient,
-    sessions_dir: str = "sessions",
 ) -> str:
     """Process one user message through the agent loop.
 
     Loops: LLM with tools → execute → repeat until the LLM responds
     without tool calls (or max iterations reached).
+
+    Session must have a Database attached (session._db) — persistence
+    is always via SQLite.
 
     Args:
         session: Current order session (mutated in place).
@@ -46,8 +48,6 @@ def process_turn(
         catalogue: Product catalogue.
         pricing: Pricing engine.
         llm_client: LLM API client.
-        sessions_dir: Directory for session persistence
-            (default ``"sessions"``).
 
     Returns:
         The assistant text response to display to the user.
@@ -77,7 +77,7 @@ def process_turn(
             # Model is responding to the customer — we're done
             content = text or "I've processed your request. Is there anything else?"
             session.add_assistant_message(content=content)
-            session.save(sessions_dir)
+            session.save()
             return content
 
         # Tool calls present — snapshot, execute, then loop
@@ -86,7 +86,7 @@ def process_turn(
         )
 
         # Snapshot before modifying session — enables rollback if tool batch crashes
-        session.save(sessions_dir)
+        session.save()
 
         session.add_assistant_message(content=None, tool_calls=tool_calls)
 
@@ -100,7 +100,7 @@ def process_turn(
                 "Tool batch failed for session %s — rolling back",
                 session.session_id,
             )
-            _restore_session_from_snapshot(session, sessions_dir)
+            _restore_session_from_snapshot(session)
             continue
 
     # 3. Fallback — max iterations exhausted (should be extremely rare)
@@ -110,7 +110,7 @@ def process_turn(
     )
     fallback = "I've processed your request. Is there anything else?"
     session.add_assistant_message(content=fallback)
-    session.save(sessions_dir)
+    session.save()
     return fallback
 
 
@@ -224,27 +224,24 @@ def _apply_transition(session: OrderSession) -> None:
 # =============================================================================
 
 
-def _restore_session_from_snapshot(
-    session: OrderSession,
-    sessions_dir: str,
-) -> None:
+def _restore_session_from_snapshot(session: OrderSession) -> None:
     """Reload session state from the last save point and copy it in-place.
 
     Used when a tool batch crashes after the snapshot was saved but before
     all tools completed. The snapshot is taken before the assistant message
     with tool calls, so restoring discards that message — the LLM retries
     cleanly on the next iteration.
-
-    Args:
-        session: The live session to restore (mutated in place).
-        sessions_dir: Filesystem directory for JSON-backed sessions.
     """
-    if session._db is not None:
-        restored = session._db.load_session(
+    if session._db is None:
+        logger.error(
+            "Cannot roll back session %s/%s — no Database attached",
             session.restaurant_id, session.session_id,
         )
-    else:
-        restored = OrderSession.load(session.session_id, sessions_dir)
+        return
+
+    restored = session._db.load_session(
+        session.restaurant_id, session.session_id,
+    )
 
     if restored is None:
         logger.error(
