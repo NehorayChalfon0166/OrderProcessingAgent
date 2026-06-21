@@ -58,19 +58,17 @@ and working; not needed for go-live (agent runs fine with `python agent.py`)
 
 ---
 
-## B3 — `.env.example` is stale 🟢 (master) / 🟡 (integration follow-up)
+## B3 — `.env.example` is stale 🟢
 
-**Problem:** `.env.example` is missing `DB_PATH`, `STRIPE_SECRET_KEY`,
-`STRIPE_WEBHOOK_SECRET`, and `API_TOKEN`. `server.py` reads `API_TOKEN` via
-raw `os.environ` instead of through `AppConfig`.
+**Problem:** `.env.example` was missing `DB_PATH`, `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, and `API_TOKEN`. `server.py` read `API_TOKEN` via
+raw `os.environ`.
 
-**Decision:** Added all four to `.env.example` + `api_token` to `AppConfig` on
-master. Still need to switch `server.py` on twilio-integration to use
-`config.api_token` instead of `os.environ.get("API_TOKEN")`.
-
-**Branch:** master ✅ (`.env.example` + `config.py`), then twilio-integration
-rebases and updates `server.py` (pending)
-**Files:** `.env.example` ✅, `config.py` ✅, `server.py` (pending)
+**Resolution:** Added all four to `.env.example` + `api_token` to `AppConfig`
+on master. Switched `server.py` on twilio-integration to use `config.api_token`
+(module-level `_api_token` set in lifespan). Removed unused `os` import.
+**Branch:** master + twilio-integration
+**Files:** `.env.example`, `config.py`, `server.py`
 
 ---
 
@@ -171,11 +169,10 @@ after SQLite proven in production.
 
 ---
 
-## N4 — No health check endpoint 🟡
+## N4 — No health check endpoint 🟢
 
 **Problem:** No `/health` endpoint for monitoring, load balancers, uptime checks.
-
-**Decision:** Add `GET /health` returning `{"status": "ok"}` to server.py.
+**Resolution:** Added `GET /health` returning `{"status": "ok"}` to server.py.
 **Branch:** twilio-integration
 **File:** `server.py`
 
@@ -188,15 +185,16 @@ shipping. Not a code fix — manual onboarding per production roadmap component 
 
 ---
 
-## New Finding — Server test gaps 🟡
+## New Finding — Server test gaps 🟢
 
-Discovered during exploration. `tests/test_server.py` on twilio-integration
-only tests the WhatsApp webhook. Missing coverage for:
+Discovered during exploration. `tests/test_server.py` only tested the WhatsApp
+webhook. Missing coverage for:
 - Printer API endpoints (`GET /api/orders`, `POST /api/orders/{id}/printed`)
 - Stripe webhook (`POST /payment/webhook`)
 - Payment UX pages (`GET /payment/success`, `GET /payment/cancel`)
 
-**Decision:** Add test coverage for all untested endpoints.
+**Resolution:** Added 11 new tests (5 printer API, 4 Stripe webhook, 2 payment
+pages). All 229 tests pass (140 integration).
 **Branch:** twilio-integration
 **File:** `tests/test_server.py`
 
