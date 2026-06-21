@@ -108,7 +108,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         auth_token=cfg.twilio_auth_token,
         whatsapp_number=cfg.twilio_whatsapp_number,
     )
-    _router = SessionRouter(cfg.sessions_dir)
+    _router = SessionRouter()
     _orders_dir = cfg.orders_dir
     _api_token = cfg.api_token
 
@@ -278,7 +278,6 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
 
     # ── Process (offloaded to thread to avoid blocking the event loop) ──
     session = _router.get_or_create(restaurant_ctx.config.id, wa_id, db=_db)
-    sessions_dir = f"{_router.sessions_dir}/{restaurant_ctx.config.id}"
     lock_key = f"{restaurant_ctx.config.id}:{wa_id}"
     async with _get_lock(lock_key):
         try:
@@ -293,9 +292,8 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                 process_turn,
                 session, text,
                 restaurant_ctx.catalogue, restaurant_ctx.pricing, _llm,
-                sessions_dir=sessions_dir,
             )
-            session.save(sessions_dir)
+            session.save()
 
             # Payment link generation — if PAYMENT_PENDING, create Stripe URL
             if session.state == OrderState.PAYMENT_PENDING:

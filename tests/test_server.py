@@ -64,7 +64,6 @@ def mock_deps():
     mock_wa = mock.Mock()
     mock_wa.auth_token = "test_token"
     mock_router = mock.Mock()
-    mock_router.sessions_dir = "/tmp/test_sessions"
 
     orig = {
         "_registry": srv._registry,
@@ -469,6 +468,7 @@ class TestStripeWebhook:
         session = OrderSession(restaurant_id="marios_pizzeria")
         session.session_id = "972539534345"
         session.state = __import__("models", fromlist=["OrderState"]).OrderState.PAYMENT_PENDING
+        session._db = mock.Mock()  # type: ignore[has-type] — needed for save()
         # Leave cart empty — _save_order_file serializes it to JSON
         mock_router = mock.Mock()
         mock_router.get_or_create.return_value = session
@@ -507,6 +507,7 @@ class TestStripeWebhook:
         session = OrderSession(restaurant_id="marios_pizzeria")
         session.session_id = "972539534345"
         session.state = __import__("models", fromlist=["OrderState"]).OrderState.COMPLETED
+        session._db = mock.Mock()  # type: ignore[has-type] — needed for save()
         mock_router = mock.Mock()
         mock_router.get_or_create.return_value = session
         srv._router = mock_router
