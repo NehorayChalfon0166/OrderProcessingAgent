@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Orders{% endblock %}
+{% block content %}
+<h1>Orders</h1>
+<form method="get" class="filters">
+  <input type="hidden" name="token" value="{{ request.query_params.get('token', '') }}">
+  <select name="restaurant_id"><option value="">All</option>{% for r in restaurants %}<option value="{{ r.id }}" {% if filters.restaurant_id==r.id %}selected{% endif %}>{{ r.name }}</option>{% endfor %}</select>
+  <select name="order_type"><option value="">All Types</option><option value="delivery" {% if filters.order_type=='delivery' %}selected{% endif %}>Delivery</option><option value="pickup" {% if filters.order_type=='pickup' %}selected{% endif %}>Pickup</option></select>
+  <select name="payment_method"><option value="">All Payments</option><option value="cash" {% if filters.payment_method=='cash' %}selected{% endif %}>Cash</option><option value="link" {% if filters.payment_method=='link' %}selected{% endif %}>Link</option></select>
+  <button type="submit">Filter</button>
+</form>
+{% if orders %}
+<table><thead><tr><th>Order</th><th>Restaurant</th><th>Customer</th><th>Type</th><th>Payment</th><th>Total</th><th>Time</th><th></th></tr></thead><tbody>
+{% for o in orders %}
+<tr><td><code>{{ o.order_id }}</code></td><td>{{ o.restaurant_id }}</td><td>{{ o.customer_name or "—" }}</td><td>{{ o.order_type }}</td><td>{{ o.payment_method }}</td><td>${{ "%.2f"|format(o.total) }}</td><td>{{ o.created_at[:16] if o.created_at else "—" }}</td><td><a href="/orders/{{ o.order_id }}{{ token_url }}">View</a></td></tr>
+{% endfor %}
+</tbody></table>
+{% else %}<p>No orders found.</p>{% endif %}
+{% endblock %}

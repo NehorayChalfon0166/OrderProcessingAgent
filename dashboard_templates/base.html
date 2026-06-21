@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Dashboard{% endblock %} — OPA</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://unpkg.com/htmx.org@2"></script>
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header"><strong>🍕 OPA</strong><small>Admin</small></div>
+  <ul>
+    <li><a href="/{{ token_url }}">📊 Overview</a></li>
+    <li><a href="/orders{{ token_url }}">📋 Orders</a></li>
+    <li><a href="/sessions{{ token_url }}">💬 Sessions</a></li>
+    {% if registry %}
+    <li class="nav-section"><small>Menus</small></li>
+    {% for r in registry.list_restaurants() %}
+    <li><a href="/menu/{{ r.id }}{{ token_url }}">📝 {{ r.name }}</a></li>
+    {% endfor %}
+    {% endif %}
+  </ul>
+</nav>
+<main class="content">{% block content %}{% endblock %}</main>
+</body>
+</html>

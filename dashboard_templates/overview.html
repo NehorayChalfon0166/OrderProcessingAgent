@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+{% for s in stats %}
+<article>
+  <hgroup><h2>{{ s.config.name }}</h2><small>{{ s.config.id }}</small></hgroup>
+  <div class="stats-grid">
+    <div class="stat"><strong>{{ s.order_count }}</strong><small>Recent Orders</small></div>
+    <div class="stat"><strong>{{ s.unprinted_count }}</strong><small>Unprinted</small></div>
+  </div>
+  <a href="/orders{{ token_url }}&restaurant_id={{ s.config.id }}" role="button" class="secondary">View Orders</a>
+  <a href="/menu/{{ s.config.id }}{{ token_url }}" role="button" class="secondary">Edit Menu</a>
+</article>
+{% endfor %}
+{% if not stats %}<p>No restaurants configured.</p>{% endif %}
+{% endblock %}

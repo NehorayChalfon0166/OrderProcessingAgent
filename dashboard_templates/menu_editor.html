@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Menu — {{ restaurant_name }}{% endblock %}
+{% block content %}
+<h1>{{ restaurant_name }} — Menu</h1>
+<p><small>Changes take effect after server restart.</small></p>
+{% for category in menu.categories %}
+<article><h2>{{ category.name }}</h2>
+{% for item in category["items"] %}
+<div class="menu-item" id="item-{{ item.id }}">
+<hgroup><h3>{{ item.name }} <code>{{ item.id }}</code></h3><small>{% if item.get("available") is false %}❌ Out of stock{% elif item.get("unavailable_variants") %}⚠️ {{ item.unavailable_variants|length }} variant(s) unavailable{% else %}✅ Available{% endif %}</small></hgroup>
+<p>{{ item.description }}</p>
+{% if item.sizes %}
+<table><thead><tr><th>Size</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+{% for size_name, price in item.sizes.items() %}
+<tr><td>{{ size_name }}</td><td>${{ "%.2f"|format(price) }}</td><td>{% if size_name in item.get("unavailable_variants",[]) %}❌{% else %}✅{% endif %}</td>
+<td class="actions">
+<form hx-post="/menu/{{ restaurant_id }}/edit{{ token_url }}" hx-target="#msg-{{ item.id }}" hx-swap="innerHTML">
+<input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="variant" value="{{ size_name }}"><input type="hidden" name="action" value="set_price">
+<input type="number" name="value" step="0.01" value="{{ price }}" style="width:80px;display:inline"><button type="submit" class="secondary small">Update</button>
+</form>
+{% if size_name in item.get("unavailable_variants",[]) %}
+<form hx-post="/menu/{{ restaurant_id }}/edit{{ token_url }}" hx-target="#msg-{{ item.id }}" hx-swap="innerHTML" style="display:inline">
+<input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="variant" value="{{ size_name }}"><input type="hidden" name="action" value="in_stock"><button type="submit" class="small">✅ Stock</button></form>
+{% else %}
+<form hx-post="/menu/{{ restaurant_id }}/edit{{ token_url }}" hx-target="#msg-{{ item.id }}" hx-swap="innerHTML" style="display:inline">
+<input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="variant" value="{{ size_name }}"><input type="hidden" name="action" value="out_of_stock"><button type="submit" class="small secondary">🚫 86</button></form>
+{% endif %}
+</td></tr>
+{% endfor %}</tbody></table>
+{% else %}
+<p>Price: ${{ "%.2f"|format(item.price) }}</p>
+<form hx-post="/menu/{{ restaurant_id }}/edit{{ token_url }}" hx-target="#msg-{{ item.id }}" hx-swap="innerHTML" class="inline-form">
+<input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="action" value="set_price">
+<input type="number" name="value" step="0.01" value="{{ item.price }}" style="width:80px;display:inline"><button type="submit" class="secondary small">Update Price</button>
+</form>
+<form hx-post="/menu/{{ restaurant_id }}/edit{{ token_url }}" hx-target="#msg-{{ item.id }}" hx-swap="innerHTML" style="display:inline">
+<input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="action" value="{{ 'in_stock' if item.get('available') is false else 'out_of_stock' }}"><button type="submit" class="small secondary">{{ '✅ Stock' if item.get('available') is false else '🚫 86' }}</button>
+</form>
+{% endif %}
+<form hx-post="/menu/{{ restaurant_id }}/edit{{ token_url }}" hx-target="#msg-{{ item.id }}" hx-swap="innerHTML" class="inline-form">
+<input type="hidden" name="item_id" value="{{ item.id }}"><input type="hidden" name="action" value="describe">
+<input type="text" name="value" value="{{ item.description }}" style="width:300px;display:inline"><button type="submit" class="secondary small">Update Desc</button>
+</form>
+<div id="msg-{{ item.id }}"></div></div>
+{% endfor %}</article>
+{% endfor %}
+<a href="/{{ token_url }}">← Back</a>
+{% endblock %}

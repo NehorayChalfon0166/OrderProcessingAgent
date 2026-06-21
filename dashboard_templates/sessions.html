@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sessions{% endblock %}
+{% block content %}
+<h1>Active Sessions</h1>
+<form method="get" class="filters">
+  <input type="hidden" name="token" value="{{ request.query_params.get('token', '') }}">
+  <select name="restaurant_id"><option value="">All</option>{% for r in restaurants %}<option value="{{ r.id }}" {% if filters.restaurant_id==r.id %}selected{% endif %}>{{ r.name }}</option>{% endfor %}</select>
+  <button type="submit">Filter</button>
+</form>
+{% if sessions %}
+<table><thead><tr><th>Session</th><th>Restaurant</th><th>Customer</th><th>Phone</th><th>Order</th><th>Last Activity</th><th></th></tr></thead><tbody>
+{% for s in sessions %}
+<tr><td><code>{{ s.session_id }}</code></td><td>{{ s.restaurant_id }}</td><td>{{ s.customer_name or "—" }}</td><td>{{ s.customer_phone or "—" }}</td><td>{% if s.order_id %}<a href="/orders/{{ s.order_id }}{{ token_url }}">{{ s.order_id }}</a>{% else %}—{% endif %}</td><td>{{ s.updated_at[:16] if s.updated_at else "—" }}</td><td><a href="/sessions/{{ s.session_id }}{{ token_url }}">View</a></td></tr>
+{% endfor %}
+</tbody></table>
+{% else %}<p>No active sessions.</p>{% endif %}
+{% endblock %}
