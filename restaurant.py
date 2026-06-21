@@ -198,3 +198,106 @@ class RestaurantRegistry:
             twilio_phone=twilio_phone,
             owner_phone=owner_phone,
         )
+
+
+# ---------------------------------------------------------------------------
+# Restaurant config persistence
+# ---------------------------------------------------------------------------
+
+_BLANK_MENU = {
+    "restaurant_name": "",
+    "currency": "USD",
+    "categories": [],
+    "toppings": [],
+    "deals": [],
+    "delivery_fee": 0.0,
+    "min_order_amount": 0.0,
+}
+
+
+def save_restaurant(
+    path: str,
+    restaurant_id: str,
+    name: str,
+    twilio_phone: str,
+    owner_phone: str,
+    menu_path: str | None = None,
+) -> str:
+    """Add or update a restaurant in restaurants.json. Writes atomically.
+
+    If *menu_path* is not provided, it defaults to
+    ``menus/{restaurant_id}.json``. If that file doesn't exist, a blank
+    menu template is created.
+
+    Returns a human-readable result message. The caller is responsible
+    for restarting the server to reload the registry.
+
+    Raises:
+        FileNotFoundError: If restaurants.json doesn't exist.
+        ValueError: If required fields are missing.
+    """
+    config_path = Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Restaurant config not found: {config_path.resolve()}")
+
+    if not name:
+        raise ValueError("Restaurant name is required")
+    if not twilio_phone:
+        raise ValueError("Twilio phone number is required")
+    if not owner_phone:
+        raise ValueError("Owner phone number is required")
+
+    menu = menu_path or f"menus/{restaurant_id}.json"
+    menu_full = Path(menu)
+    if not menu_full.is_absolute():
+        menu_full = config_path.parent / menu
+
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    restaurants = raw.get("restaurants", {})
+
+    is_new = restaurant_id not in restaurants
+    restaurants[restaurant_id] = {
+        "name": name,
+        "menu_path": str(menu),
+        "twilio_phone": twilio_phone,
+        "owner_phone": owner_phone,
+    }
+    raw["restaurants"] = restaurants
+
+    _atomic_write(config_path, raw)
+
+    # Auto-create blank menu for new restaurants
+    if is_new and not menu_full.exists():
+        menu_full.parent.mkdir(parents=True, exist_ok=True)
+        menu_data = dict(_BLANK_MENU)
+        menu_data["restaurant_name"] = name
+        menu_full.write_text(
+            json.dumps(menu_data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return (
+            f"Restaurant '{restaurant_id}' added. Blank menu created at {menu}. "
+            f"Restart server to apply."
+        )
+    else:
+        action = "Added" if is_new else "Updated"
+        return f"{action} restaurant '{restaurant_id}'. Restart server to apply."
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    """Write JSON data to *path* atomically via temp file + rename."""
+    import os as _os
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        fd = _os.open(str(tmp), _os.O_RDONLY)
+        _os.fsync(fd)
+        _os.close(fd)
+        _os.replace(str(tmp), str(path))
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
+        raise

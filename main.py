@@ -335,6 +335,22 @@ def main() -> None:
         help="Restaurant ID (defaults to first in restaurants.json)",
     )
 
+    # ── Restaurant subcommand ────────────────────────────────────────────
+    rest_parser = sub.add_parser("restaurant", help="Manage restaurants")
+    rest_sub = rest_parser.add_subparsers(dest="restaurant_action")
+    rest_add = rest_sub.add_parser("add", help="Add a new restaurant")
+    rest_add.add_argument("restaurant_id", help="Restaurant slug")
+    rest_add.add_argument("--name", required=True, help="Display name")
+    rest_add.add_argument("--phone", required=True, help="Twilio WhatsApp number")
+    rest_add.add_argument("--owner", required=True, help="Owner phone number")
+    rest_add.add_argument("--menu", default=None, help="Menu path (default: menus/{id}.json)")
+
+    rest_edit = rest_sub.add_parser("edit", help="Edit a restaurant")
+    rest_edit.add_argument("restaurant_id", help="Restaurant slug")
+    rest_edit.add_argument("--name", default=None, help="New display name")
+    rest_edit.add_argument("--phone", default=None, help="New Twilio number")
+    rest_edit.add_argument("--owner", default=None, help="New owner phone")
+
     args = parser.parse_args()
 
     # Default to CLI if no subcommand given
@@ -390,6 +406,39 @@ def main() -> None:
         _run_dashboard(args, config)
     elif args.command == "manage-menu":
         _run_manage_menu(args, config)
+    elif args.command == "restaurant":
+        _run_restaurant(args, config)
+
+
+def _run_restaurant(args, config: AppConfig) -> None:
+    """Add or edit a restaurant."""
+    from restaurant import save_restaurant
+
+    action = args.restaurant_action
+    if action == "add":
+        result = save_restaurant(
+            config.restaurants_path, args.restaurant_id,
+            name=args.name, twilio_phone=args.phone,
+            owner_phone=args.owner, menu_path=args.menu,
+        )
+        print(f"✅ {result}")
+    elif action == "edit":
+        registry = RestaurantRegistry(config.restaurants_path)
+        existing = registry.get_by_id(args.restaurant_id)
+        if existing is None:
+            print(f"❌ Restaurant '{args.restaurant_id}' not found.")
+            sys.exit(1)
+        result = save_restaurant(
+            config.restaurants_path, args.restaurant_id,
+            name=args.name or existing.config.name,
+            twilio_phone=args.phone or existing.config.twilio_phone,
+            owner_phone=args.owner or existing.config.owner_phone,
+            menu_path=existing.config.menu_path,
+        )
+        print(f"✅ {result}")
+    else:
+        print(f"❌ Unknown action: {action}. Use 'add' or 'edit'.")
+        sys.exit(1)
 
 
 def _run_dashboard(args, config: AppConfig) -> None:
