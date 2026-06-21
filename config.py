@@ -46,8 +46,9 @@ class AppConfig:
     # Printer agent API (used by integration branches, harmless on master)
     api_token: str = ""
 
-    # Debug
+    # Logging
     debug: bool = False
+    log_json: bool = False
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -75,6 +76,7 @@ class AppConfig:
             stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET", ""),
             api_token=os.getenv("API_TOKEN", ""),
             debug=os.getenv("DEBUG", "false").lower() == "true",
+            log_json=os.getenv("LOG_JSON", "false").lower() == "true",
         )
 
         config._validate()

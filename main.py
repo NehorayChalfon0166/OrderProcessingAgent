@@ -30,13 +30,33 @@ from session import OrderSession
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 
-def setup_logging(debug: bool = False) -> None:
+def setup_logging(debug: bool = False, log_json: bool = False) -> None:
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+
+    if log_json:
+        try:
+            from pythonjsonlogger import jsonlogger
+        except ImportError:
+            print(
+                "LOG_JSON=true requires python-json-logger. "
+                "Install it with: pip install python-json-logger"
+            )
+            import sys
+            sys.exit(1)
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(jsonlogger.JsonFormatter(
+            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        ))
+        logging.basicConfig(level=level, handlers=[handler])
+    else:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
     if not debug:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("openai").setLevel(logging.WARNING)
@@ -326,7 +346,7 @@ def main() -> None:
     if debug:
         config.debug = True
 
-    setup_logging(config.debug)
+    setup_logging(config.debug, config.log_json)
 
     if args.command == "cli":
         restaurant_id = getattr(args, "restaurant", None)
