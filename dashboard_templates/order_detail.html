@@ -106,7 +106,7 @@
           </tr>
         </thead>
         <tbody>
-          {% for item in order.items %}
+          {% for item in order["items"] %}
           <tr>
             <td>{{ item.name }}</td>
             <td>{{ item.size | default('—', true) }}</td>
@@ -125,8 +125,8 @@
                 <span class="text-muted">—</span>
               {% endif %}
             </td>
-            <td>${{ '%.2f' | format(item.base_price) }}</td>
-            <td>${{ '%.2f' | format(item.line_total) }}</td>
+            <td>${{ '%.2f' | format(item.base_price | default(0)) }}</td>
+            <td>${{ '%.2f' | format(item.line_total | default(0)) }}</td>
           </tr>
           {% endfor %}
         </tbody>

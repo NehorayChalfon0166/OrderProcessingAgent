@@ -22,7 +22,7 @@ def dashboard_app(tmp_path):
         yield TestClient(dash.app)
     dash._db = None; dash._registry = None; dash._api_token = ""; dash._templates = None
 
-_NO_TEMPLATES = True  # templates deleted — re-enable when new templates exist
+_NO_TEMPLATES = False  # templates exist — all tests enabled
 
 def _skip_if_no_templates():
     if _NO_TEMPLATES:
