@@ -15,32 +15,27 @@
 
 <div class="stats-grid">
   <div class="stat-card">
-    <div class="stat-icon">🏪</div>
-    <div class="stat-value">{{ stats|length }}</div>
-    <div class="stat-label">Total Restaurants</div>
-  </div>
-
-  <div class="stat-card">
     <div class="stat-icon">📦</div>
-    <div class="stat-value">{{ total_orders }}</div>
-    <div class="stat-label">Total Orders</div>
+    <div class="stat-value">{{ total_orders_today }}</div>
+    <div class="stat-label">Orders Today</div>
   </div>
 
   <div class="stat-card">
-    <div class="stat-icon">🖨️</div>
-    <div class="stat-value">
-      {{ total_unprinted }}
-      {% if total_unprinted > 0 %}
-        <span class="badge badge-warning">{{ total_unprinted }}</span>
-      {% endif %}
-    </div>
-    <div class="stat-label">Pending Print</div>
+    <div class="stat-icon">💰</div>
+    <div class="stat-value">${{ '%.2f'|format(total_revenue_today) }}</div>
+    <div class="stat-label">Revenue Today</div>
   </div>
 
   <div class="stat-card">
     <div class="stat-icon">💬</div>
-    <div class="stat-value">{{ total_unprinted }}</div>
+    <div class="stat-value">{{ total_active }}</div>
     <div class="stat-label">Active Sessions</div>
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-icon">🖨️</div>
+    <div class="stat-value">{{ total_pending_print }}</div>
+    <div class="stat-label">Pending Print</div>
   </div>
 </div>
 
@@ -59,12 +54,16 @@
     </div>
     <div class="card-body">
       <div class="stat-row">
-        <span class="stat-row-label">Orders:</span>
-        <span class="stat-row-value">{{ s.order_count }}</span>
+        <span class="stat-row-label">Today:</span>
+        <span class="stat-row-value">{{ s.orders_today }} orders / ${{ '%.2f'|format(s.revenue_today) }}</span>
       </div>
       <div class="stat-row">
         <span class="stat-row-label">Pending Print:</span>
         <span class="stat-row-value">{{ s.unprinted_count }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-row-label">Active Sessions:</span>
+        <span class="stat-row-value">{{ s.active_sessions }}</span>
       </div>
     </div>
     <div class="card-actions">

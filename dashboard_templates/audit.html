@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Log{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Audit Log</h1>
+    <p class="page-subtitle">{{ entries|length }} recent event{{ 's' if entries|length != 1 else '' }}</p>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <div class="filter-group">
+    <label class="filter-label" for="filter-restaurant">Restaurant</label>
+    <select id="filter-restaurant" class="filter-select" data-filter="restaurant_id">
+      <option value="">All</option>
+      {% for r in restaurants %}
+        <option value="{{ r.id }}" {% if filters.restaurant_id == r.id %}selected{% endif %}>{{ r.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+{% if entries %}
+<div class="table-container">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Action</th>
+        <th>Actor</th>
+        <th>Restaurant</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td>{{ e.timestamp[:19] }}</td>
+        <td><span class="badge badge-neutral">{{ e.action }}</span></td>
+        <td><code class="id-mono">{{ e.actor[:20] }}{% if e.actor|length > 20 %}…{% endif %}</code></td>
+        <td>{{ e.restaurant_id }}</td>
+        <td class="text-muted text-sm">{{ e.details or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="empty-state-icon">📋</div>
+  <h3 class="empty-state-title">No audit entries yet</h3>
+  <p class="empty-state-text">Events will appear here as orders are completed.</p>
+</div>
+{% endif %}
+{% endblock %}

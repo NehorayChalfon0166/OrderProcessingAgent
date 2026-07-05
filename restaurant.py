@@ -45,7 +45,6 @@ class RestaurantConfig:
     menu_path: str
     twilio_phone: str
     owner_phone: str
-    api_token: str = ""  # per-restaurant override; falls back to global API_TOKEN
 
 
 @dataclass
@@ -233,7 +232,6 @@ class RestaurantRegistry:
             menu_path=menu_path,
             twilio_phone=twilio_phone,
             owner_phone=owner_phone,
-            api_token=data.get("api_token", ""),
         )
 
 

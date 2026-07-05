@@ -106,18 +106,44 @@ def _render(request: Request, name: str, **ctx) -> HTMLResponse:
 async def overview(request: Request):
     _check_token(request)
     db, registry = _require_init()
+    from datetime import datetime as _dt, timezone as _tz
+    today = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+
+    total_orders_today = 0
+    total_revenue_today = 0.0
+    total_active = 0
+    total_pending_print = 0
     stats = []
+
     for r in registry.list_restaurants():
-        orders = db.get_orders(r.id, limit=100)
+        orders = db.get_orders(r.id, limit=500)
         unprinted = db.get_unprinted_orders(r.id)
         active = len(db.list_active_sessions(r.id, limit=200))
+
+        orders_today = [o for o in orders if (o.get("created_at") or "")[:10] == today]
+        revenue_today = sum(float(o.get("total", 0)) for o in orders_today)
+
+        total_orders_today += len(orders_today)
+        total_revenue_today += revenue_today
+        total_active += active
+        total_pending_print += len(unprinted)
+
         stats.append({
             "config": r,
             "order_count": len(orders),
             "unprinted_count": len(unprinted),
             "active_sessions": active,
+            "orders_today": len(orders_today),
+            "revenue_today": revenue_today,
         })
-    return _render(request, "overview.html", stats=stats)
+
+    return _render(request, "overview.html",
+        stats=stats,
+        total_orders_today=total_orders_today,
+        total_revenue_today=total_revenue_today,
+        total_active=total_active,
+        total_pending_print=total_pending_print,
+    )
 
 
 @app.get("/orders", response_class=HTMLResponse)
@@ -391,6 +417,19 @@ async def kitchen_display(request: Request, restaurant_id: str = ""):
         restaurant_name=restaurant_name,
         restaurants=registry.list_restaurants(),
         now=_dt.now().isoformat(),
+    )
+
+
+@app.get("/audit", response_class=HTMLResponse)
+async def audit_log(request: Request, restaurant_id: str = "", limit: int = Query(default=100, le=500)):
+    _check_token(request)
+    db, registry = _require_init()
+    entries = db.get_audit_log(restaurant_id=restaurant_id or "", limit=limit)
+    restaurants = registry.list_restaurants()
+    return _render(request, "audit.html",
+        entries=entries,
+        restaurants=restaurants,
+        filters={"restaurant_id": restaurant_id, "limit": limit},
     )
 
 
