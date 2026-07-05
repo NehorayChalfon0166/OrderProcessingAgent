@@ -100,6 +100,9 @@ channel wraps this — CLI, WhatsApp, web, voice, etc.
 - **No `browse_menu` tool exists.** The LLM has no way to programmatically
   explore the menu — it discovers items only through `add_to_cart` failures.
   This is an intentional design choice (the system prompt includes hints).
+- **Online payment (Stripe) is dormant.** Stripe doesn't operate in Israel.
+  Payment is cash-on-delivery only. `payment.py` is kept for future expansion.
+  For Israeli online payment, see Grow: https://grow.business
 - **Two servers share one SQLite DB** (dashboard on 8081, Twilio on 8080).
   WAL mode enables concurrent reads. Both must use the same `DB_PATH`.
 - **`twilio` and `stripe` packages are listed in requirements.txt** but

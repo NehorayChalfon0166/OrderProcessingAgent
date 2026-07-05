@@ -1,9 +1,19 @@
 """Stripe payment integration — checkout sessions and webhook verification.
 
-Creates Stripe Checkout Sessions for online payment. Cash-on-delivery
-(payment_method="cash") already works natively through the core.
+STATUS: DORMANT. Stripe does not currently operate in Israel. Online payment
+is disabled — the server warns on startup and only "cash" payment method
+is available. This module is kept for future expansion.
 
-Architecture:
+When Stripe becomes available or you expand to supported markets, set
+STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in .env to enable it.
+
+For Israel online payment, the leading alternative is Grow (formerly Meshulam):
+  https://grow.business
+  API docs: https://grow-il.readme.io
+  Key API: createPaymentLink — generates a URL to send via WhatsApp
+  Requirements: business registration (עוסק מורשה or עוסק פטור)
+
+Architecture (when active):
 - create_checkout_session() is called by the channel layer (server.py) after
   process_turn() returns PAYMENT_PENDING. It generates a Stripe-hosted
   payment page URL that gets sent to the customer via WhatsApp.
