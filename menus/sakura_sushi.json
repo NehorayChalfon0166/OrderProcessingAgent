@@ -1,0 +1,48 @@
+{
+  "restaurant_name": "Sakura Sushi",
+  "currency": "USD",
+  "categories": [
+    {
+      "name": "Signature Rolls",
+      "items": [
+        {"id": "dragon_roll", "name": "Dragon Roll", "description": "Eel, avocado, cucumber, unagi sauce", "price": 16.99, "available_toppings": ["extra_ginger", "extra_wasabi"]},
+        {"id": "rainbow_roll", "name": "Rainbow Roll", "description": "Tuna, salmon, shrimp, avocado", "price": 18.99, "available_toppings": ["extra_ginger", "extra_wasabi"]},
+        {"id": "spicy_tuna_roll", "name": "Spicy Tuna Roll", "description": "Fresh tuna, spicy mayo, cucumber", "price": 14.99, "available_toppings": ["extra_ginger", "extra_wasabi"]}
+      ]
+    },
+    {
+      "name": "Classic Rolls",
+      "items": [
+        {"id": "california_roll", "name": "California Roll", "description": "Crab, avocado, cucumber", "price": 12.99, "available_toppings": ["extra_ginger", "extra_wasabi"]},
+        {"id": "salmon_avocado_roll", "name": "Salmon Avocado Roll", "description": "Fresh salmon, avocado", "price": 13.99, "available_toppings": ["extra_ginger", "extra_wasabi"]}
+      ]
+    },
+    {
+      "name": "Nigiri & Sashimi",
+      "items": [
+        {"id": "salmon_nigiri", "name": "Salmon Nigiri (2pc)", "description": "Fresh salmon over seasoned rice", "price": 8.99},
+        {"id": "tuna_sashimi", "name": "Tuna Sashimi (5pc)", "description": "Premium bluefin tuna", "price": 22.99},
+        {"id": "sashimi_combo", "name": "Sashimi Combo (12pc)", "description": "Chef's selection of fresh sashimi", "price": 34.99}
+      ]
+    },
+    {
+      "name": "Sides & Drinks",
+      "items": [
+        {"id": "miso_soup", "name": "Miso Soup", "description": "Traditional miso with tofu and seaweed", "price": 4.99},
+        {"id": "edamame", "name": "Edamame", "description": "Steamed soybeans with sea salt", "price": 5.99},
+        {"id": "green_tea", "name": "Green Tea", "description": "Japanese sencha", "price": 3.50},
+        {"id": "ramune", "name": "Ramune", "description": "Japanese marble soda", "price": 4.50}
+      ]
+    }
+  ],
+  "toppings": [
+    {"id": "extra_ginger", "name": "Extra Ginger", "price": 0.50},
+    {"id": "extra_wasabi", "name": "Extra Wasabi", "price": 0.50}
+  ],
+  "deals": [
+    {"id": "sushi_party", "name": "Sushi Party Platter", "description": "3 signature rolls + 12pc sashimi + 2 soups + 2 drinks", "price": 79.99},
+    {"id": "date_night", "name": "Date Night Combo", "description": "2 signature rolls + edamame + 2 drinks", "price": 44.99}
+  ],
+  "delivery_fee": 4.99,
+  "min_order_amount": 15.00
+}

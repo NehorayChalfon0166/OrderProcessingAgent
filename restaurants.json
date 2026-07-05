@@ -5,6 +5,18 @@
       "menu_path": "menus/marios_pizzeria.json",
       "twilio_phone": "+14155238886",
       "owner_phone": "+15551234567"
+    },
+    "sakura_sushi": {
+      "name": "Sakura Sushi",
+      "menu_path": "menus/sakura_sushi.json",
+      "twilio_phone": "+14155238886",
+      "owner_phone": "+15559876543"
+    },
+    "golden_burger": {
+      "name": "Golden Burger",
+      "menu_path": "menus/golden_burger.json",
+      "twilio_phone": "+14155238886",
+      "owner_phone": "+15551112222"
     }
   }
 }

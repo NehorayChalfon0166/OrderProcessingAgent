@@ -1,0 +1,41 @@
+{
+  "restaurant_name": "Golden Burger",
+  "currency": "USD",
+  "categories": [
+    {
+      "name": "Burgers",
+      "items": [
+        {"id": "classic_burger", "name": "Classic Burger", "description": "Beef patty, lettuce, tomato, pickles, special sauce", "price": 11.99, "available_toppings": ["bacon", "extra_cheese", "fried_egg", "jalapenos"]},
+        {"id": "double_cheese", "name": "Double Cheeseburger", "description": "Two beef patties, double cheddar", "price": 15.99, "available_toppings": ["bacon", "extra_cheese", "fried_egg", "jalapenos"]},
+        {"id": "veggie_burger", "name": "Veggie Burger", "description": "House-made bean & mushroom patty", "price": 12.99, "available_toppings": ["extra_cheese", "fried_egg", "jalapenos"]}
+      ]
+    },
+    {
+      "name": "Sides",
+      "items": [
+        {"id": "fries", "name": "French Fries", "description": "Crispy golden fries", "price": 4.99},
+        {"id": "onion_rings", "name": "Onion Rings", "description": "Beer-battered onion rings", "price": 5.99},
+        {"id": "coleslaw", "name": "Coleslaw", "description": "Creamy homemade coleslaw", "price": 3.99}
+      ]
+    },
+    {
+      "name": "Drinks",
+      "items": [
+        {"id": "cola", "name": "Coca Cola", "description": "Can 330ml", "price": 2.99},
+        {"id": "milkshake", "name": "Milkshake", "description": "Vanilla, chocolate, or strawberry", "sizes": {"regular": 5.99, "large": 7.99}, "default_size": "regular"}
+      ]
+    }
+  ],
+  "toppings": [
+    {"id": "bacon", "name": "Bacon", "price": 2.00},
+    {"id": "extra_cheese", "name": "Extra Cheese", "price": 1.50},
+    {"id": "fried_egg", "name": "Fried Egg", "price": 1.50},
+    {"id": "jalapenos", "name": "Jalapeños", "price": 1.00}
+  ],
+  "deals": [
+    {"id": "burger_combo", "name": "Burger Combo", "description": "Any burger + fries + drink", "price": 17.99},
+    {"id": "family_feast", "name": "Family Feast", "description": "3 burgers + 2 large fries + 3 drinks", "price": 44.99}
+  ],
+  "delivery_fee": 3.99,
+  "min_order_amount": 10.00
+}
