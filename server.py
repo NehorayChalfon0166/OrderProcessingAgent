@@ -135,8 +135,17 @@ def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
         session.cart, ot
     )
 
+    # Generate a unique order ID — not the session_id (phone number),
+    # which would collide on repeat orders from the same customer.
+    ts = datetime.now(timezone.utc)
+    order_id = (
+        f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_"
+        f"{str(uuid.uuid4())[:6]}"
+    )
+
     payload = {
-        "order_id": session.session_id,
+        "order_id": order_id,
+        "session_id": session.session_id,
         "restaurant_id": session.restaurant_id,
         "restaurant": restaurant_ctx.config.name,
         "items": [item.model_dump() for item in session.cart],
@@ -145,13 +154,13 @@ def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
         "delivery_fee": delivery_fee,
         "total": total,
         "order_type": ot.value,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "payment_method": session.payment_method or "cash",
+        "timestamp": ts.isoformat(),
     }
 
     order_dir = Path(_orders_dir) / session.restaurant_id
     order_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"{session.session_id}_{ts}.json"
+    filename = f"{order_id}.json"
     filepath = order_dir / filename
     filepath.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -161,10 +170,11 @@ def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
     if _db is not None:
         _db.save_order(payload)
 
-    logger.info("Order saved: %s", filepath)
+    logger.info("Order saved: %s (id: %s)", filepath, order_id)
+    return order_id
 
 
-def _notify_restaurant(session, restaurant_ctx: RestaurantContext) -> None:
+def _notify_restaurant(session, restaurant_ctx: RestaurantContext, order_id: str = "") -> None:
     """Send a WhatsApp notification to the restaurant about a new order."""
     restaurant_phone = restaurant_ctx.config.owner_phone.removeprefix("+")
     items_text = "\n".join(
@@ -178,9 +188,10 @@ def _notify_restaurant(session, restaurant_ctx: RestaurantContext) -> None:
     phone = session.customer.phone or "N/A"
     address = session.customer.address or ""
 
+    order_ref = order_id or session.session_id
     message = (
         f"🔔 New Order!\n"
-        f"Order #{session.session_id}\n"
+        f"Order #{order_ref}\n"
         f"Customer: {name} ({phone})\n"
         f"Type: {ot}"
     )
@@ -282,10 +293,8 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
         logger.error("No restaurant configured for To=%s", to_raw)
         raise HTTPException(status_code=500, detail="Unknown restaurant")
 
-    assert _twilio is not None
-    assert _router is not None
-    assert _registry is not None
-    assert _llm is not None
+    if _twilio is None or _router is None or _registry is None or _llm is None:
+        raise HTTPException(status_code=500, detail="Server not initialised")
 
     # ── Process (offloaded to thread to avoid blocking the event loop) ──
     session = _router.get_or_create(restaurant_ctx.config.id, wa_id, db=_db)
@@ -324,9 +333,9 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                 response = f"Pay here to confirm your order: {payment_url}"
 
             if session.is_complete:
-                _save_order_file(session, restaurant_ctx)
+                order_id = _save_order_file(session, restaurant_ctx)
                 # Notify restaurant via WhatsApp
-                _notify_restaurant(session, restaurant_ctx)
+                _notify_restaurant(session, restaurant_ctx, order_id)
         except Exception as e:
             logger.error("process_turn failed for %s: %s", wa_id[:6], e)
             response = (
@@ -378,6 +387,9 @@ async def receive_payment(request: Request):
         raise HTTPException(status_code=400, detail="Missing order metadata")
 
     # Load restaurant context for order saving and notification
+    if _registry is None or _twilio is None or _router is None:
+        raise HTTPException(status_code=500, detail="Server not initialised")
+
     restaurant_ctx = _registry.get_by_id(restaurant_id)
     if restaurant_ctx is None:
         logger.error("Unknown restaurant in Stripe webhook: %s", restaurant_id)
@@ -392,8 +404,8 @@ async def receive_payment(request: Request):
     session.save()
 
     # Persist order and notify restaurant (same as WhatsApp cash flow)
-    _save_order_file(session, restaurant_ctx)
-    _notify_restaurant(session, restaurant_ctx)
+    order_id = _save_order_file(session, restaurant_ctx)
+    _notify_restaurant(session, restaurant_ctx, order_id)
 
     # Send confirmation via WhatsApp
     await asyncio.to_thread(

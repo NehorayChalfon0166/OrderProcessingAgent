@@ -92,25 +92,16 @@ channel wraps this — CLI, WhatsApp, web, voice, etc.
 
 ## Gotchas
 
-- **Session ID = sanitized phone number.** Two orders from the same phone
-  overwrite each other in the DB — OrderRow uses `replace`. For production,
-  generate unique order IDs separate from session IDs.
-- **Dashboard menu edits don't hot-reload.** Catalogue/PricingEngine load at
-  server startup. After editing a menu via dashboard, restart the server.
-- **API token leaks via dashboard URLs.** Token is passed as `?token=xxx`
-  query parameter — appears in browser history, server logs, Referer headers.
-- **`/sessions` dashboard page queries the orders table**, not sessions —
-  sessions and orders are conflated there.
-- **Printer agent expects `/api/`-prefixed routes** that don't exist on the
-  dashboard server. Printer agent is non-functional until those endpoints
-  are added or the agent is updated.
-- **`payment.py` and `catalogue.expand_deal()` are dead code** — not called
-  by any reachable path on master. Either integrate them or delete them.
-- **`requirements.txt` is incomplete.** `fastapi`, `uvicorn`, `jinja2`, and
-  `requests` are imported at runtime but not listed as dependencies.
-- **`assert` is used for runtime validation in `dashboard.py`.** If Python
-  runs with `-O`, asserts are stripped → crashes.
+- **Dashboard menu edits now hot-reload** (Catalogue/PricingEngine rebuilt
+  on successful edit). No restart needed for menu changes.
+- **Printer agent endpoints live on the Twilio server (port 8080), not the
+  dashboard (port 8081).** Point the printer agent config at the Twilio
+  server URL — the `/api/orders` routes are there.
 - **No `browse_menu` tool exists.** The LLM has no way to programmatically
   explore the menu — it discovers items only through `add_to_cart` failures.
-- **`set_customer_info` silently ignores invalid `order_type` values.**
-  `except ValueError: pass` gives the caller no error feedback.
+  This is an intentional design choice (the system prompt includes hints).
+- **Two servers share one SQLite DB** (dashboard on 8081, Twilio on 8080).
+  WAL mode enables concurrent reads. Both must use the same `DB_PATH`.
+- **`twilio` and `stripe` packages are listed in requirements.txt** but
+  are only needed if you run the Twilio webhook server. The CLI and
+  dashboard work without them.
