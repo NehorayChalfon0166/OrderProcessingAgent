@@ -5,7 +5,7 @@ Python owns all state transitions and math — the LLM suggests actions,
 our code executes them.
 
 Supports **multiple restaurants** from a single deployment. Each restaurant
-gets its own menu, its own WhatsApp number, and isolated sessions/orders.
+gets its own menu, WhatsApp number, and isolated sessions/orders.
 
 ## Quick Start
 
@@ -16,97 +16,93 @@ cp .env.example .env
 python main.py cli
 ```
 
-### Adding a Restaurant
+## Dashboard
 
-1. **Create a menu file** in `menus/{restaurant_id}.json`. Copy
-   `menus/marios_pizzeria.json` as a template and edit products, prices,
-   and deals.
+```bash
+python main.py dashboard --port 8081
+# Open http://localhost:8081/?token=<API_TOKEN>
+```
 
-2. **Register it** in `restaurants.json`:
-   ```json
-   {
-     "restaurants": {
-       "your_restaurant_id": {
-         "name": "Your Restaurant Name",
-         "menu_path": "menus/your_restaurant_id.json",
-         "twilio_phone": "+1234567890"
-       }
-     }
-   }
-   ```
+Pages: Overview (live metrics), Orders (search + pagination), Sessions,
+Restaurants, Menus (full editor), Analytics, Kitchen display, Audit log.
 
-3. **Restart the server.** The registry picks it up automatically. Each
-   restaurant needs its own Twilio WhatsApp number configured to POST
-   webhooks to your server.
+## WhatsApp Server
 
-### Multilingual Responses
-
-The agent automatically responds in whatever language the customer uses.
-A Hebrew-speaking customer gets Hebrew replies; an English speaker gets
-English. Product names stay in English (they come from the menu), but
-all conversation happens in the customer's language. No configuration
-needed — it's built into the system prompt.
+```bash
+ngrok http 8080                          # Expose localhost
+python main.py server --port 8080        # Twilio webhook
+# Set Twilio webhook: https://<ngrok>/whatsapp/webhook
+```
 
 ## Architecture
 
 ```
-User ↔ CLI / Twilio Webhook → agent_loop.py (process_turn)
-         ↕
-    OrderSession (session.py)         ← state machine + persistence
-     ├── LLMClient (llm_client.py)    ← DeepSeek API wrapper
-     ├── RestaurantRegistry           ← per-restaurant catalogue + pricing
-     │    └── Catalogue (catalogue.py) ← menu loading + fuzzy matching
-     │    └── PricingEngine (pricing.py) ← Python-owned math (never LLM)
-     └── Tools (tools.py)             ← LLM-callable actions, state-gated
+Customer → WhatsApp → Twilio → server.py → agent_loop.py (process_turn)
+                                              ├── LLMClient (DeepSeek API)
+                                              ├── RestaurantRegistry
+                                              │    ├── Catalogue (menu + fuzzy matching)
+                                              │    └── PricingEngine (Python-owned math)
+                                              └── Tools (add_to_cart, confirm_order, ...)
+                                              ↓
+                                         OrderSession (SQLite via Peewee)
+                                              ↓
+                                    Save order → Notify restaurant → Print ticket
 ```
 
-**State Flow:**
-```
-BUILDING → REVIEW → PAYMENT_PENDING → COMPLETED
-    ↓         ↓           ↓
- CANCELLED CANCELLED   CANCELLED
-```
+**State Flow:** `BUILDING → REVIEW → PAYMENT_PENDING → COMPLETED` (CANCELLED from any)
 
 ## Project Structure
 
 ```
-├── main.py              # CLI entry point (cli + server subcommands)
-├── agent_loop.py        # Loop-based agent orchestration
-├── session.py           # OrderSession model + JSON persistence
+├── main.py              # CLI entry point (cli, server, dashboard subcommands)
+├── agent_loop.py        # LLM ↔ tools loop, state transitions, rollback
+├── server.py            # FastAPI Twilio WhatsApp webhook
+├── dashboard.py         # FastAPI admin dashboard (port 8081)
+├── twilio_client.py     # Twilio REST API wrapper
+├── session.py           # OrderSession model + persistence
 ├── session_router.py    # (restaurant_id, phone) → session mapping
 ├── restaurant.py        # Multi-tenant restaurant registry
-├── restaurants.json     # Restaurant deployment configuration
-├── menus/               # One menu JSON file per restaurant
+├── restaurants.json     # Restaurant configurations
+├── menus/               # One menu JSON per restaurant
 ├── llm_client.py        # DeepSeek API wrapper (OpenAI SDK)
-├── prompts.py           # System prompt builder (multilingual-aware)
+├── prompts.py           # System prompt builder
 ├── models.py            # Pydantic v2 domain models
-├── tools.py             # @tool decorator + tool implementations
+├── tools.py             # @tool decorator + 7 order tools
 ├── catalogue.py         # Menu loading, fuzzy matching, deals
 ├── pricing.py           # Python-owned pricing engine
-├── config.py            # Env-var configuration
+├── config.py            # Environment-variable configuration
 ├── db.py                # SQLite persistence (Peewee ORM)
-├── payment.py           # Stripe checkout + webhook verification
-├── printer.py           # ESC/POS thermal printer formatting
-├── docs/                # Component + architecture documentation
-├── tests/               # Full pytest suite (197 tests)
-├── menus/               # One menu JSON file per restaurant
-└── orders/              # Completed order JSONs (per-restaurant subdirs)
-```
-
-**Integration branch** (`twilio-integration` — I/O layer, rebases on master):
-```
-├── server.py            # FastAPI Twilio WhatsApp webhook
-├── twilio_client.py     # Twilio REST API wrapper
-└── .githooks/           # Pre-commit hook enforcing branch rules
+├── menu_manager.py      # Atomic menu editing
+├── payment.py           # Stripe checkout (dormant — not in Israel)
+├── printer.py           # ESC/POS thermal printer formatter
+├── printer_agent/       # Standalone printer polling client
+├── utils.py             # Shared utilities (atomic write, order IDs)
+├── dashboard_static/    # CSS + JS for dashboard
+├── dashboard_templates/ # Jinja2 HTML templates
+├── docs/                # Architecture + deployment documentation
+├── tests/               # 351 tests (pytest + E2E)
+├── orders/              # Completed order JSONs
+└── sessions/            # Legacy JSON sessions (migrated to SQLite)
 ```
 
 ## Key Design Decisions
 
 1. **Python owns state and math** — LLM suggests, Python validates and executes
-2. **Tool-calling, not JSON parsing** — LLM calls typed Python functions
+2. **Tool-calling** — LLM calls typed Python functions, results are Pydantic models
 3. **Loop-based agent** — LLM with tools → execute → repeat until clean text
 4. **Session = order** — one session per order, keyed by (restaurant, phone)
-5. **Menu is the source of truth** — items validated against per-restaurant menu
+5. **Menu is source of truth** — items validated against per-restaurant catalogue
 6. **Multi-tenant** — restaurants.json drives everything, isolated sessions/orders
 7. **Multilingual** — agent auto-matches customer's language
-8. **Single provider** — DeepSeek via OpenAI SDK. Add providers in `config.py`
+8. **All code on master** — single branch, Docker + CI ready
+
+## Adding a Restaurant
+
+1. Create a menu file in `menus/{id}.json`
+2. Add to `restaurants.json` with Twilio phone and owner phone
+3. Restart server — or use the dashboard to add restaurants live
+
+## Deployment
+
+See `docs/deployment.md` for Docker, environment variables, Twilio setup,
+and monitoring.
