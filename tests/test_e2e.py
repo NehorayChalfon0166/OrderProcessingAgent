@@ -240,7 +240,7 @@ class TestErrorRecovery:
 
         resp = process_turn(s, "Add many things", cat, prc, mock_llm, max_iterations=3)
         # Should hit max_iterations=3 and return fallback text
-        assert len(resp) > 0  # got some fallback
+        assert isinstance(resp, str) and len(resp) > 0  # fallback response received
         # Cart has items from the first 3 iterations
         assert len(s.cart) >= 1
 

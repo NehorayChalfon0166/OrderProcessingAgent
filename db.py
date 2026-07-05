@@ -81,6 +81,19 @@ class OrderRow(BaseModel):
         table_name = "orders"
 
 
+class AuditRow(BaseModel):
+    """Audit log entry — records who did what and when."""
+
+    timestamp = TextField()
+    actor = TextField()              # e.g. "customer:97253...", "dashboard:admin"
+    action = TextField()             # e.g. "order_completed", "menu_edit"
+    restaurant_id = TextField()
+    details = TextField(null=True)   # JSON with extra context
+
+    class Meta:
+        table_name = "audit_log"
+
+
 # ---------------------------------------------------------------------------
 # Database class
 # ---------------------------------------------------------------------------
@@ -113,6 +126,7 @@ class Database:
         BaseModel._meta.database = self._db
         SessionRow._meta.database = self._db
         OrderRow._meta.database = self._db
+        AuditRow._meta.database = self._db
 
         self._create_tables()
         self._migrate_if_needed()
@@ -262,6 +276,12 @@ class Database:
         self.save_order(payload)
 
         logger.info("Order saved: %s (id: %s)", filepath, order_id)
+        self.log_audit(
+            actor=f"customer:{session.session_id}",
+            action="order_completed",
+            restaurant_id=session.restaurant_id,
+            details=json.dumps({"order_id": order_id, "total": total}),
+        )
         return order_id
 
     def save_order(self, order_data: dict) -> None:
@@ -327,6 +347,28 @@ class Database:
             logger.info("Cleaned up %d old sessions (older than %d days)", deleted, max_age_days)
         return deleted
 
+    def log_audit(self, actor: str, action: str, restaurant_id: str, details: str = "") -> None:
+        """Record an audit log entry."""
+        from datetime import datetime as _dt, timezone as _tz
+        AuditRow.create(
+            timestamp=_dt.now(_tz.utc).isoformat(),
+            actor=actor,
+            action=action,
+            restaurant_id=restaurant_id,
+            details=details,
+        )
+
+    def get_audit_log(self, restaurant_id: str = "", limit: int = 100) -> list[dict]:
+        """Return recent audit entries, newest first."""
+        query = AuditRow.select().order_by(AuditRow.timestamp.desc()).limit(limit)
+        if restaurant_id:
+            query = query.where(AuditRow.restaurant_id == restaurant_id)
+        return [
+            {"timestamp": r.timestamp, "actor": r.actor, "action": r.action,
+             "restaurant_id": r.restaurant_id, "details": r.details}
+            for r in query
+        ]
+
     def mark_printed(self, order_id: str) -> None:
         """Set printed=1 for an order. Idempotent."""
         OrderRow.update(printed=1).where(
@@ -337,19 +379,23 @@ class Database:
     # Initialization
     # ------------------------------------------------------------------
 
-    def _create_tables(self) -> None:
-        """Create tables if they don't exist."""
-        self._db.create_tables([SessionRow, OrderRow], safe=True)
-        # Add customer_address column to existing orders table if needed
+    def _migrate_add_column(self, table: str, column: str, col_type: str) -> None:
+        """Add a column if it doesn't already exist. Idempotent."""
         try:
             self._db.execute_sql(
-                "ALTER TABLE orders ADD COLUMN customer_address TEXT"
+                f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
             )
         except Exception as e:
             if "duplicate column" not in str(e).lower():
                 logger.warning(
-                    "Unexpected error adding customer_address column: %s", e
+                    "Unexpected error in migration %s.%s: %s", table, column, e
                 )
+
+    def _create_tables(self) -> None:
+        """Create tables if they don't exist, run schema migrations."""
+        self._db.create_tables([SessionRow, OrderRow, AuditRow], safe=True)
+        # Migrations — each runs once, idempotent
+        self._migrate_add_column("orders", "customer_address", "TEXT")
 
     def _migrate_if_needed(self) -> None:
         """One-time migration from legacy JSON files.

@@ -93,9 +93,36 @@ def _make_order_domain() -> DomainConfig:
 DOMAINS: dict[str, DomainConfig] = {}
 
 
+_SUPPORT_PROMPT = """You are a helpful customer support agent for {restaurant_name}.
+
+You answer questions about the menu, hours, delivery areas, and policies.
+Be friendly and helpful. If the customer wants to place an order, help them
+— but never guess menu items or prices.
+
+## Rules
+- Answer questions clearly and concisely.
+- If you don't know something, be honest — suggest the customer contact
+  the restaurant directly for that information.
+- Match the customer's language.
+- If the customer wants to place an order, guide them to our ordering bot."""
+
+
+def _make_support_domain() -> DomainConfig:
+    """Build the support domain — no catalogue needed, just Q&A."""
+    from tools import cancel_order
+    return DomainConfig(
+        name="support",
+        tools_by_state={"active": [cancel_order]},
+        initial_state="active",
+        system_prompt_template=_SUPPORT_PROMPT,
+        requires_catalogue=False,
+    )
+
+
 def _register_builtins() -> None:
     """Register built-in domains. Called once at module load."""
     DOMAINS["order"] = _make_order_domain()
+    DOMAINS["support"] = _make_support_domain()
 
 
 def get_domain(name: str = "order") -> DomainConfig:

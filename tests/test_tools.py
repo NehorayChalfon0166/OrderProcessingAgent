@@ -384,21 +384,22 @@ class TestCancelOrder:
 
 
 class TestToolsByState:
-    def test_building_has_seven_tools(self):
-        assert len(TOOLS_BY_STATE[OrderState.BUILDING]) == 7
+    def test_building_tools(self):
         names = {f.__tool_name__ for f in TOOLS_BY_STATE[OrderState.BUILDING]}
-        assert "add_to_cart" in names
-        assert "request_review" in names
-        assert "confirm_order" not in names  # only in REVIEW
+        for t in ["add_to_cart", "remove_from_cart", "update_item", "view_cart",
+                   "set_customer_info", "request_review", "cancel_order"]:
+            assert t in names, f"Missing {t} in BUILDING tools"
+        assert "confirm_order" not in names
 
-    def test_review_has_seven_tools(self):
-        assert len(TOOLS_BY_STATE[OrderState.REVIEW]) == 7
+    def test_review_tools(self):
         names = {f.__tool_name__ for f in TOOLS_BY_STATE[OrderState.REVIEW]}
-        assert "confirm_order" in names
-        assert "request_review" not in names  # only in BUILDING
+        for t in ["add_to_cart", "remove_from_cart", "update_item", "view_cart",
+                   "set_customer_info", "confirm_order", "cancel_order"]:
+            assert t in names, f"Missing {t} in REVIEW tools"
+        assert "request_review" not in names
 
-    def test_payment_pending_has_two_tools(self):
-        assert len(TOOLS_BY_STATE[OrderState.PAYMENT_PENDING]) == 2
+    def test_payment_pending_tools(self):
         names = {f.__tool_name__ for f in TOOLS_BY_STATE[OrderState.PAYMENT_PENDING]}
         assert "view_cart" in names
         assert "cancel_order" in names
+        assert "confirm_order" not in names

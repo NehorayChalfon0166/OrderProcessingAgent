@@ -369,14 +369,18 @@ class TestLockEviction:
         srv._lock_access.clear()
         srv._locks["a"] = asyncio.Lock()
         srv._locks["b"] = asyncio.Lock()
-        srv._lock_access["a"] = time.monotonic() - 99999  # very stale
-        srv._lock_access["b"] = time.monotonic()          # fresh
-        orig = srv._MAX_LOCKS_BEFORE_SWEEP
-        srv._MAX_LOCKS_BEFORE_SWEEP = 1
+        srv._lock_access["a"] = time.monotonic() - 99999
+        srv._lock_access["b"] = time.monotonic()
+        # Pad to hit sweep threshold (1000)
+        for i in range(1001):
+            srv._lock_access[f"pad_{i}"] = time.monotonic()
+            srv._locks[f"pad_{i}"] = asyncio.Lock()
         try:
             srv._sweep_stale_locks()
         finally:
-            srv._MAX_LOCKS_BEFORE_SWEEP = orig
+            for i in range(1001):
+                srv._locks.pop(f"pad_{i}", None)
+                srv._lock_access.pop(f"pad_{i}", None)
         assert "a" not in srv._locks
         assert "b" in srv._locks
 
