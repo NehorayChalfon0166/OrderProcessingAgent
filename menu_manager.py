@@ -21,10 +21,10 @@ from __future__ import annotations
 
 import copy
 import json
-import os
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from utils import atomic_write_json
 
 
 # ---------------------------------------------------------------------------
@@ -37,16 +37,21 @@ class MenuAction:
     """A single atomic menu edit."""
 
     action: str
-    """One of: set_price, out_of_stock, in_stock, describe."""
+    """One of: set_price, out_of_stock, in_stock, describe, update_item,
+    add_item, remove_item, add_category, add_deal, update_deal, remove_deal,
+    add_topping, update_topping, remove_topping."""
 
     item_id: str
-    """Menu item ID (e.g. 'pizza_margherita')."""
+    """Menu item/category/deal/topping ID."""
 
     variant_id: str | None = None
-    """Size key for sized items (e.g. 'large'). None for flat-price items."""
+    """Size key for sized items. None for flat-price items."""
 
-    value: str | float | None = None
-    """New price (float for set_price) or description (str for describe)."""
+    value: str | float | dict | None = None
+    """New price, description, or full item data dict for add/update actions."""
+
+    extra: dict | None = None
+    """Additional context (e.g. category_name for add_item)."""
 
 
 @dataclass
@@ -123,11 +128,14 @@ def manage_menu(menu_path: str, actions: list[MenuAction]) -> MenuActionResult:
     items_index = _build_item_index(menu)
     applied = 0
     for action in actions:
-        _apply_action(action, items_index)
+        _apply_action(action, items_index, menu)
+        # Rebuild index after structural changes (add/remove)
+        if action.action in ("add_item", "remove_item", "add_deal", "remove_deal",
+                             "add_topping", "remove_topping", "add_category"):
+            items_index = _build_item_index(menu)
         applied += 1
 
-    # Write atomically: temp file → fsync → rename
-    _atomic_write(menu_file, menu)
+    atomic_write_json(menu_file, menu)
 
     return MenuActionResult(
         success=True,
@@ -158,45 +166,64 @@ def _build_item_index(menu: dict) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 
+_VALID_ACTIONS = {
+    "set_price", "out_of_stock", "in_stock", "describe",
+    "update_item", "add_item", "remove_item",
+    "add_category", "add_deal", "update_deal", "remove_deal",
+    "add_topping", "update_topping", "remove_topping",
+}
+
+
 def _validate_action(action: MenuAction, index: dict[str, dict]) -> str | None:
     """Validate an action. Returns an error string or None if valid."""
 
-    if action.action not in ("set_price", "out_of_stock", "in_stock", "describe"):
-        return f"Unknown action '{action.action}'. Valid: set_price, out_of_stock, in_stock, describe"
+    if action.action not in _VALID_ACTIONS:
+        return f"Unknown action '{action.action}'"
 
+    # Actions that create new items don't need existing item check
+    if action.action in ("add_item", "add_category", "add_deal", "add_topping"):
+        if action.action == "add_item" and not action.extra:
+            return "add_item requires extra.category_name"
+        if action.action in ("add_item", "add_deal", "add_topping") and not isinstance(action.value, dict):
+            return f"{action.action} requires value to be a dict with item data"
+        if action.action == "add_category" and not isinstance(action.value, str):
+            return "add_category requires value to be the category name (str)"
+        return None
+
+    # Removal actions
+    if action.action in ("remove_item", "remove_deal", "remove_topping"):
+        if action.item_id not in index:
+            return f"Item '{action.item_id}' not found"
+        return None
+
+    # Actions that update existing items
     item = index.get(action.item_id)
     if item is None:
         return f"Item '{action.item_id}' not found in menu"
 
-    # Variant validation for sized items
-    if action.variant_id is not None:
-        sizes = item.get("sizes")
-        if sizes is None:
-            return f"Item '{action.item_id}' is not sized — no variant '{action.variant_id}'"
-        if action.variant_id not in sizes:
-            valid = ", ".join(sorted(sizes.keys()))
-            return f"Variant '{action.variant_id}' not found for '{action.item_id}'. Valid: {valid}"
+    if action.action in ("set_price", "out_of_stock", "in_stock", "describe"):
+        if action.variant_id is not None:
+            sizes = item.get("sizes")
+            if sizes is None:
+                return f"Item '{action.item_id}' is not sized"
+            if action.variant_id not in sizes:
+                return f"Variant '{action.variant_id}' not found"
 
-    # Per-action validation
-    if action.action == "set_price":
-        if action.value is None:
-            return "set_price requires a value (the new price)"
-        try:
-            price = float(action.value)
-            if price <= 0:
-                return f"Price must be positive, got {price}"
-        except (TypeError, ValueError):
-            return f"Invalid price value: {action.value}"
+        if action.action == "set_price":
+            if action.value is None:
+                return "set_price requires a value"
+            try:
+                if float(action.value) <= 0:
+                    return "Price must be positive"
+            except (TypeError, ValueError):
+                return f"Invalid price: {action.value}"
+        elif action.action == "describe":
+            if not isinstance(action.value, str):
+                return "describe requires a string value"
 
-    elif action.action in ("out_of_stock", "in_stock"):
-        # No extra validation — just needs item to exist
-        pass
-
-    elif action.action == "describe":
-        if action.value is None:
-            return "describe requires a value (the new description)"
-        if not isinstance(action.value, str):
-            return f"Description must be a string, got {type(action.value).__name__}"
+    if action.action == "update_item":
+        if not isinstance(action.value, dict):
+            return "update_item requires value to be a dict"
 
     return None
 
@@ -206,9 +233,9 @@ def _validate_action(action: MenuAction, index: dict[str, dict]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _apply_action(action: MenuAction, index: dict[str, dict]) -> None:
+def _apply_action(action: MenuAction, index: dict[str, dict], menu: dict) -> None:
     """Apply a validated action to the menu in-place."""
-    item = index[action.item_id]
+    item = index.get(action.item_id) if action.item_id in index else None
 
     if action.action == "set_price":
         price = float(action.value) if action.value else 0.0
@@ -219,11 +246,9 @@ def _apply_action(action: MenuAction, index: dict[str, dict]) -> None:
 
     elif action.action == "out_of_stock":
         if action.variant_id is not None:
-            # Mark specific variant unavailable
             item.setdefault("unavailable_variants", [])
-            variants = item["unavailable_variants"]
-            if action.variant_id not in variants:
-                variants.append(action.variant_id)
+            if action.variant_id not in item["unavailable_variants"]:
+                item["unavailable_variants"].append(action.variant_id)
         else:
             item["available"] = False
 
@@ -236,30 +261,62 @@ def _apply_action(action: MenuAction, index: dict[str, dict]) -> None:
                 item.pop("unavailable_variants", None)
         else:
             item["available"] = True
+            item.pop("unavailable_variants", None)
 
     elif action.action == "describe":
         item["description"] = str(action.value)
 
+    elif action.action == "update_item":
+        data = action.value if isinstance(action.value, dict) else {}
+        for k, v in data.items():
+            if k in ("id",):
+                continue  # never change ID
+            item[k] = v
 
-# ---------------------------------------------------------------------------
-# Atomic write
-# ---------------------------------------------------------------------------
+    elif action.action == "add_item":
+        data = action.value if isinstance(action.value, dict) else {}
+        cat_name = (action.extra or {}).get("category_name", "")
+        for cat in menu.get("categories", []):
+            if cat["name"] == cat_name:
+                cat.setdefault("items", []).append(data)
+                index[data.get("id", action.item_id)] = data
+                break
 
+    elif action.action == "remove_item":
+        for cat in menu.get("categories", []):
+            cat["items"] = [i for i in cat.get("items", []) if i["id"] != action.item_id]
+        index.pop(action.item_id, None)
 
-def _atomic_write(path: Path, data: dict) -> None:
-    """Write data to path atomically via temp file + rename."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        tmp_fd = os.open(str(tmp), os.O_RDONLY)
-        os.fsync(tmp_fd)
-        os.close(tmp_fd)
-        os.replace(str(tmp), str(path))
-    except Exception:
-        # Clean up temp file on failure
-        if tmp.exists():
-            tmp.unlink()
-        raise
+    elif action.action == "add_category":
+        name = str(action.value) if action.value else action.item_id
+        menu.setdefault("categories", []).append({"name": name, "items": []})
+
+    elif action.action == "add_deal":
+        data = action.value if isinstance(action.value, dict) else {}
+        menu.setdefault("deals", []).append(data)
+        index[data.get("id", action.item_id)] = data
+
+    elif action.action == "update_deal":
+        data = action.value if isinstance(action.value, dict) else {}
+        for k, v in data.items():
+            if k not in ("id",):
+                item[k] = v
+
+    elif action.action == "remove_deal":
+        menu["deals"] = [d for d in menu.get("deals", []) if d["id"] != action.item_id]
+        index.pop(action.item_id, None)
+
+    elif action.action == "add_topping":
+        data = action.value if isinstance(action.value, dict) else {}
+        menu.setdefault("toppings", []).append(data)
+        index[data.get("id", action.item_id)] = data
+
+    elif action.action == "update_topping":
+        data = action.value if isinstance(action.value, dict) else {}
+        for k, v in data.items():
+            if k not in ("id",):
+                item[k] = v
+
+    elif action.action == "remove_topping":
+        menu["toppings"] = [t for t in menu.get("toppings", []) if t["id"] != action.item_id]
+        index.pop(action.item_id, None)

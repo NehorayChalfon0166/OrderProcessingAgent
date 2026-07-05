@@ -221,7 +221,8 @@ class TestRestaurantRegistryLoading:
             with pytest.raises(ValueError, match="missing required field 'owner_phone'"):
                 RestaurantRegistry(str(tmp / "restaurants.json"))
 
-    def test_nonexistent_menu_file_raises(self):
+    def test_nonexistent_menu_file_skipped(self):
+        """Bad menu file logs error and skips the restaurant, doesn't crash."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             _make_restaurants_json(tmp / "restaurants.json", {
@@ -232,8 +233,8 @@ class TestRestaurantRegistryLoading:
                     "owner_phone": "+15551234567",
                 }
             })
-            with pytest.raises(FileNotFoundError):
-                RestaurantRegistry(str(tmp / "restaurants.json"))
+            reg = RestaurantRegistry(str(tmp / "restaurants.json"))
+            assert len(reg.list_restaurants()) == 0  # skipped, not crashed
 
 
 # ---------------------------------------------------------------------------

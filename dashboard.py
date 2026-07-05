@@ -62,8 +62,12 @@ def _require_init() -> tuple[Database, RestaurantRegistry]:
 
 
 def _check_token(request: Request) -> None:
+    # If no token configured, allow (dev mode without auth)
     if not _api_token:
         return
+    # If token configured but dashboard not initialised, block
+    if _db is None:
+        raise HTTPException(status_code=503, detail="Dashboard not initialised")
     # Check cookie first (set on first query-param access)
     token = request.cookies.get("dashboard_token")
     if token and token == _api_token:
@@ -279,20 +283,35 @@ async def edit_menu(request: Request, restaurant_id: str):
     if ctx is None:
         raise HTTPException(status_code=404, detail="Restaurant not found")
     from menu_manager import MenuAction, manage_menu
-    form = await request.form()
-    action_type = str(form.get("action", ""))
-    item_id = str(form.get("item_id", ""))
-    variant = str(form.get("variant", "")) or None
-    value = str(form.get("value", "")) or None
-    if action_type == "set_price" and value:
+
+    # Accept both form-encoded (simple actions) and JSON (add/update item data)
+    ct = request.headers.get("content-type", "")
+    if "application/json" in ct:
+        body = await request.json()
+        action_type = str(body.get("action", ""))
+        item_id = str(body.get("item_id", body.get("id", "")))
+        variant = body.get("variant")
+        value = body.get("value")
+        extra = body.get("extra")
+    else:
+        form = await request.form()
+        action_type = str(form.get("action", ""))
+        item_id = str(form.get("item_id", ""))
+        variant = str(form.get("variant", "")) or None
+        value = str(form.get("value", "")) or None
+        extra = None
+
+    # Parse value for set_price
+    if action_type == "set_price" and value and not isinstance(value, (int, float, dict)):
         try:
             value = float(value)
-        except ValueError:
+        except (ValueError, TypeError):
             return HTMLResponse("<p style='color:red'>Invalid price</p>", status_code=400)
-    result = manage_menu(ctx.config.menu_path, [MenuAction(action=action_type, item_id=item_id, variant_id=variant, value=value)])
+
+    result = manage_menu(ctx.config.menu_path, [
+        MenuAction(action=action_type, item_id=item_id, variant_id=variant, value=value, extra=extra)
+    ])
     if result.success:
-        # Hot-reload: rebuild Catalogue and PricingEngine so the menu
-        # editor shows updated data without a server restart.
         registry.reload_restaurant(restaurant_id)
         return HTMLResponse(f"<p style='color:green'>✅ {result.message}</p>")
     return HTMLResponse("<p style='color:red'>" + "<br>".join(result.errors) + "</p>", status_code=400)

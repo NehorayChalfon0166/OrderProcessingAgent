@@ -89,6 +89,11 @@ def process_turn(
         session.add_assistant_message(content=None, tool_calls=tool_calls)
 
         try:
+            if len(tool_calls) > 5:
+                logger.warning(
+                    "Truncating %d tool calls to 5 for session %s",
+                    len(tool_calls), session.session_id,
+                )
             for tc in tool_calls[:5]:
                 _execute_tool(session, catalogue, pricing, tc, tool_funcs)
 

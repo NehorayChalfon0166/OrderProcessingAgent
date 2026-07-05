@@ -13,9 +13,12 @@ TOOLS_BY_STATE is the single source of truth for which tools are available when.
 from __future__ import annotations
 
 import inspect
+import logging
 import uuid
 from functools import wraps
 from typing import get_type_hints
+
+logger = logging.getLogger(__name__)
 
 from catalogue import Catalogue
 from models import (
@@ -277,10 +280,7 @@ def set_customer_info(
         try:
             session.customer.order_type = OrderType(order_type.lower())
         except ValueError:
-            # Log and surface the invalid value so the LLM can correct it
-            import logging
-            _logger = logging.getLogger(__name__)
-            _logger.warning(
+            logger.warning(
                 "set_customer_info: invalid order_type '%s', ignoring", order_type
             )
             missing.append(

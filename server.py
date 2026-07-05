@@ -94,11 +94,14 @@ def _validate_message(text: str) -> str:
 def _is_duplicate(message_sid: str) -> bool:
     """Return True if this MessageSid was already processed."""
     now = _time_module.monotonic()
-    _processed_sids = {k: v for k, v in _processed_sids.items() if now - v < 3600}
+    # Purge expired entries (1hr TTL) in place
+    expired = [k for k, v in _processed_sids.items() if now - v > 3600]
+    for k in expired:
+        del _processed_sids[k]
     if message_sid in _processed_sids:
         return True
     if len(_processed_sids) > _MAX_SIDS:
-        oldest = min(_processed_sids, key=_processed_sids.get)  # type: ignore[arg-type]
+        oldest = min(_processed_sids, key=lambda k: _processed_sids[k])
         del _processed_sids[oldest]
     _processed_sids[message_sid] = now
     return False
@@ -376,20 +379,24 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
             await _inc_metric("llm_calls")
 
             if session.state == OrderState.PAYMENT_PENDING:
-                base_url = f"{request.url.scheme}://{request.url.netloc}"
-                payment_url = create_checkout_session(
-                    session_id=session.session_id,
-                    restaurant_id=restaurant_ctx.config.id,
-                    restaurant_name=restaurant_ctx.config.name,
-                    items=[item.model_dump() for item in session.cart],
-                    total=restaurant_ctx.pricing.compute_totals(
-                        session.cart,
-                        session.customer.order_type or OrderType.PICKUP,
-                    )[2],
-                    success_url=f"{base_url}/payment/success",
-                    cancel_url=f"{base_url}/payment/cancel",
-                )
-                response = f"Pay here to confirm your order: {payment_url}"
+                if not (_cfg and _cfg.stripe_secret_key and _cfg.stripe_webhook_secret):
+                    logger.warning("PAYMENT_PENDING but Stripe not configured — cannot create payment link")
+                    response = "Sorry, online payment is not available. Pay cash on delivery."
+                else:
+                    base_url = f"{request.url.scheme}://{request.url.netloc}"
+                    payment_url = create_checkout_session(
+                        session_id=session.session_id,
+                        restaurant_id=restaurant_ctx.config.id,
+                        restaurant_name=restaurant_ctx.config.name,
+                        items=[item.model_dump() for item in session.cart],
+                        total=restaurant_ctx.pricing.compute_totals(
+                            session.cart,
+                            session.customer.order_type or OrderType.PICKUP,
+                        )[2],
+                        success_url=f"{base_url}/payment/success",
+                        cancel_url=f"{base_url}/payment/cancel",
+                    )
+                    response = f"Pay here to confirm your order: {payment_url}"
 
             if session.is_complete:
                 order_id = _save_order_file(session, restaurant_ctx)

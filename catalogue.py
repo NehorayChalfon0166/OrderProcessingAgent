@@ -232,7 +232,6 @@ class Catalogue:
     # ------------------------------------------------------------------
 
     @staticmethod
-    @staticmethod
     def _normalize(s: str) -> str:
         """Normalize a string for fuzzy matching — lowercase, strip quotes."""
         return s.lower().strip().replace("’", "").replace("’", "").replace(""", "").replace(""", "")

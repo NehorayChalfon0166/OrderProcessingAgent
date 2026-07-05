@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_loop import process_turn
+from utils import generate_order_id
 from config import AppConfig
 from db import Database
 from llm_client import LLMClient
@@ -127,12 +128,9 @@ def save_order(
     if session._db is not None:
         return session._db.persist_completed_order(session, pricing, restaurant_name, orders_dir)
     # Fallback for sessions without a DB handle (shouldn't happen in normal flow)
-    import uuid as _uuid
-    from datetime import datetime as _dt, timezone as _tz
     ot = session.customer.order_type or OrderType.PICKUP
     subtotal, delivery_fee, total = pricing.compute_totals(session.cart, ot)
-    ts = _dt.now(_tz.utc)
-    order_id = f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_{str(_uuid.uuid4())[:6]}"
+    order_id = generate_order_id(session.restaurant_id)
     payload = {
         "order_id": order_id, "session_id": session.session_id,
         "restaurant_id": session.restaurant_id, "restaurant": restaurant_name,

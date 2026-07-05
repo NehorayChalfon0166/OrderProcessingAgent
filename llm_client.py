@@ -94,7 +94,8 @@ class LLMClient:
                     raise  # permanent error or retries exhausted
 
         # Retries exhausted
-        assert last_exc is not None
+        if last_exc is None:
+            raise RuntimeError("LLM retry loop exited without an exception")
         logger.error("LLM call failed after %d attempts: %s", _MAX_RETRIES, last_exc)
         raise last_exc
 

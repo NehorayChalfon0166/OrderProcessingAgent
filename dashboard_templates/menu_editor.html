@@ -8,6 +8,9 @@
     <a href="/menus" class="back-link">← Back to Menus</a>
     <h1 class="page-title">{{ restaurant_name }} — Menu Editor</h1>
   </div>
+  <div>
+    <button class="btn btn-primary" onclick="openAddCategory()">+ Add Category</button>
+  </div>
 </div>
 
 <div class="info-bar">
@@ -16,71 +19,45 @@
   <div class="info-item"><strong>Min Order:</strong> ${{ '%.2f'|format(menu.min_order_amount or 0) }}</div>
 </div>
 
-{% for category in menu.categories %}
+{% for category in menu['categories'] %}
 <div class="card menu-category" style="margin-top: 24px;">
   <div class="card-header">
-    <h3 class="card-title">{{ category.name }}</h3>
-    <span class="text-muted">{{ category['items']|length }} item{{ 's' if category['items']|length != 1 else '' }}</span>
+    <h3 class="card-title">{{ category['name'] }}</h3>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="text-muted">{{ category['items']|length }} items</span>
+      <button class="btn btn-sm btn-primary" onclick="openAddItem('{{ category['name'] }}')">+ Add Item</button>
+    </div>
   </div>
   <div class="card-body">
     <div class="table-container">
       <table class="data-table">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Sizes</th>
-            <th>Price</th>
-            <th>Stock</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Item</th><th>Size/Price</th><th>Stock</th><th>Actions</th></tr></thead>
         <tbody>
           {% for item in category['items'] %}
           <tr>
             <td>
-              <strong>{{ item.name }}</strong>
-              <div class="text-muted text-sm">{{ item.description or '' }}</div>
+              <strong>{{ item['name'] }}</strong>
+              <div class="text-muted text-sm">{{ item.get('description', '') }}</div>
             </td>
             <td>
-              {% if item['sizes'] %}
+              {% if item.get('sizes') %}
                 {% for size, price in item['sizes'].items() %}
                   <span class="badge badge-neutral">{{ size }}: ${{ '%.2f'|format(price) }}</span>
                 {% endfor %}
               {% else %}
-                <span class="text-muted">Flat price</span>
+                ${{ '%.2f'|format(item.get('price', 0)) }}
               {% endif %}
             </td>
             <td>
-              {% if item['sizes'] %}
-                {% for size, price in item['sizes'].items() %}
-                  <div style="display:flex;align-items:center;gap:4px;margin:2px 0;">
-                    <span style="font-size:0.8rem;">{{ size }}:</span>
-                    <input type="number" step="0.01" min="0"
-                           value="{{ '%.2f'|format(price) }}"
-                           data-action="set_price" data-item="{{ item.id }}" data-variant="{{ size }}"
-                           class="price-input" style="width:80px;padding:4px 6px;font-size:0.8rem;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;">
-                  </div>
-                {% endfor %}
-              {% else %}
-                <input type="number" step="0.01" min="0"
-                       value="{{ '%.2f'|format(item.price) }}"
-                       data-action="set_price" data-item="{{ item.id }}"
-                       class="price-input" style="width:80px;padding:4px 6px;font-size:0.8rem;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;">
-              {% endif %}
-            </td>
-            <td>
-              {% if item.available is defined and not item.available %}
+              {% if item.get('available') is sameas false %}
                 <span class="badge badge-danger">Out of stock</span>
               {% else %}
                 <span class="badge badge-success">In stock</span>
               {% endif %}
             </td>
             <td>
-              {% if item.available is defined and not item.available %}
-                <button class="btn btn-sm btn-success" data-action="in_stock" data-item="{{ item.id }}">Mark In Stock</button>
-              {% else %}
-                <button class="btn btn-sm btn-warning" data-action="out_of_stock" data-item="{{ item.id }}">Mark Out of Stock</button>
-              {% endif %}
+              <button class="btn btn-sm btn-outline" onclick="openEditItem('{{ item['id'] }}', '{{ category['name'] }}')">Edit</button>
+              <button class="btn btn-sm btn-ghost" style="color:#ef4444;" onclick="deleteItem('{{ item['id'] }}')">Delete</button>
             </td>
           </tr>
           {% endfor %}
@@ -92,111 +69,258 @@
 {% endfor %}
 
 {# Deals #}
-{% if menu.deals %}
 <div class="card menu-category" style="margin-top: 24px;">
   <div class="card-header">
     <h3 class="card-title">Deals</h3>
+    <button class="btn btn-sm btn-primary" onclick="openAddDeal()">+ Add Deal</button>
   </div>
   <div class="card-body">
+    {% if menu.get('deals') %}
     <div class="table-container">
       <table class="data-table">
-        <thead><tr><th>Name</th><th>Price</th><th>Description</th></tr></thead>
+        <thead><tr><th>Name</th><th>Price</th><th>Description</th><th>Actions</th></tr></thead>
         <tbody>
-          {% for deal in menu.deals %}
+          {% for deal in menu['deals'] %}
           <tr>
-            <td><strong>{{ deal.name }}</strong></td>
+            <td><strong>{{ deal['name'] }}</strong></td>
+            <td>${{ '%.2f'|format(deal['price']) }}</td>
+            <td class="text-muted text-sm">{{ deal.get('description', '') }}</td>
             <td>
-              <input type="number" step="0.01" min="0" value="{{ '%.2f'|format(deal.price) }}"
-                     data-action="set_price" data-item="{{ deal.id }}"
-                     class="price-input" style="width:80px;padding:4px 6px;font-size:0.8rem;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;">
+              <button class="btn btn-sm btn-outline" onclick="openEditDeal('{{ deal['id'] }}')">Edit</button>
+              <button class="btn btn-sm btn-ghost" style="color:#ef4444;" onclick="deleteDeal('{{ deal['id'] }}')">Delete</button>
             </td>
-            <td class="text-muted text-sm">{{ deal.description or '' }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+    {% else %}
+    <p class="text-muted">No deals configured.</p>
+    {% endif %}
   </div>
 </div>
-{% endif %}
 
 {# Toppings #}
-{% if menu.toppings %}
 <div class="card menu-category" style="margin-top: 24px;">
   <div class="card-header">
     <h3 class="card-title">Toppings</h3>
+    <button class="btn btn-sm btn-primary" onclick="openAddTopping()">+ Add Topping</button>
   </div>
   <div class="card-body">
+    {% if menu.get('toppings') %}
     <div class="table-container">
       <table class="data-table">
-        <thead><tr><th>Name</th><th>Price</th><th>Category</th></tr></thead>
+        <thead><tr><th>Name</th><th>Price</th><th>Category</th><th>Actions</th></tr></thead>
         <tbody>
-          {% for topping in menu.toppings %}
+          {% for topping in menu['toppings'] %}
           <tr>
-            <td><strong>{{ topping.name }}</strong></td>
+            <td><strong>{{ topping['name'] }}</strong></td>
+            <td>${{ '%.2f'|format(topping['price']) }}</td>
+            <td class="text-muted text-sm">{{ topping.get('category', '—') }}</td>
             <td>
-              <input type="number" step="0.01" min="0" value="{{ '%.2f'|format(topping.price) }}"
-                     data-action="set_price" data-item="{{ topping.id }}"
-                     class="price-input" style="width:80px;padding:4px 6px;font-size:0.8rem;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;">
+              <button class="btn btn-sm btn-outline" onclick="openEditTopping('{{ topping['id'] }}')">Edit</button>
+              <button class="btn btn-sm btn-ghost" style="color:#ef4444;" onclick="deleteTopping('{{ topping['id'] }}')">Delete</button>
             </td>
-            <td class="text-muted text-sm">{{ topping.category or '—' }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+    {% else %}
+    <p class="text-muted">No toppings configured.</p>
+    {% endif %}
   </div>
 </div>
-{% endif %}
-{% endblock %}
 
-{% block scripts %}
+{# ── Modal overlay ── #}
+<div id="modal-overlay" class="modal-overlay" hidden onclick="closeModal(event)">
+  <div class="modal" id="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="modal-title">Edit Item</h3>
+      <button class="btn btn-ghost" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modal-save" onclick="saveModal()">Save</button>
+    </div>
+  </div>
+</div>
+
+{# ── Menu data for JS ── #}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-  // Price edit on Enter/blur
-  document.querySelectorAll('.price-input').forEach(function(input) {
-    input.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        savePrice(input);
-      }
-    });
-    input.addEventListener('blur', function() {
-      if (input.dataset._dirty) savePrice(input);
-    });
-    input.addEventListener('change', function() {
-      input.dataset._dirty = '1';
-      savePrice(input);
-    });
-  });
+window._menuData = {{ menu | tojson | safe }};
+window._menuPath = '/menu/{{ restaurant_id }}/edit';
 
-  // Stock toggle buttons
-  document.querySelectorAll('[data-action="out_of_stock"], [data-action="in_stock"]').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      var action = btn.dataset.action;
-      var itemId = btn.dataset.item;
-      var form = new FormData();
-      form.append('action', action);
-      form.append('item_id', itemId);
-      fetch(window.location.pathname + '/edit', { method: 'POST', body: form })
-        .then(function(r) { return r.ok ? r.text() : Promise.reject(r); })
-        .then(function() { window.location.reload(); })
-        .catch(function() { window.showToast('Failed to update stock', 'error'); });
-    });
-  });
-});
-
-function savePrice(input) {
-  var form = new FormData();
-  form.append('action', 'set_price');
-  form.append('item_id', input.dataset.item);
-  if (input.dataset.variant) form.append('variant', input.dataset.variant);
-  form.append('value', input.value);
-  fetch(window.location.pathname + '/edit', { method: 'POST', body: form })
-    .then(function(r) { return r.ok ? r.text() : Promise.reject(r); })
-    .then(function() { window.showToast('Price updated', 'success'); })
-    .catch(function() { window.showToast('Failed to update price', 'error'); });
-  input.dataset._dirty = undefined;
+function api(action, data) {
+  return fetch(window._menuPath, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: action, ...data})
+  }).then(function(r) { return r.ok ? r.text() : r.text().then(function(t) { throw new Error(t); }); });
 }
+
+function showModal(title, bodyHtml) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML = bodyHtml;
+  document.getElementById('modal-overlay').hidden = false;
+}
+function closeModal(e) {
+  if (e && e.target !== document.getElementById('modal-overlay')) return;
+  document.getElementById('modal-overlay').hidden = true;
+}
+window._modalAction = null;
+window._modalItemId = null;
+
+// ── Item edit ──
+function openEditItem(itemId, catName) {
+  window._modalAction = 'update_item';
+  window._modalItemId = itemId;
+  var item = window._menuData['categories'].flatMap(function(c) { return c['items']; }).find(function(i) { return i['id'] === itemId; });
+  if (!item) return;
+  var sizes = item['sizes'] || {};
+  var sizesHtml = Object.entries(sizes).map(function(e) {
+    return '<div style="display:flex;gap:4px;margin:2px 0;"><input value="'+e[0]+'" class="size-key" style="flex:1;padding:6px;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;"><input type="number" step="0.01" value="'+e[1]+'" class="size-val" style="flex:1;padding:6px;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;"><button class="btn btn-sm btn-ghost" style="color:#ef4444;" onclick="this.parentElement.remove()">✕</button></div>';
+  }).join('');
+  showModal('Edit: ' + item['name'],
+    '<div class="form-grid"><div class="form-group"><label class="form-label">Name</label><input id="f-name" class="form-input" value="'+esc(item['name'])+'"></div>' +
+    '<div class="form-group"><label class="form-label">Description</label><input id="f-desc" class="form-input" value="'+esc(item['description']||'')+'"></div>' +
+    '<div class="form-group"><label class="form-label">Price (flat)</label><input id="f-price" type="number" step="0.01" class="form-input" value="'+(item['price']||0)+'"></div>' +
+    '<div class="form-group"><label class="form-label">Default Size</label><input id="f-default-size" class="form-input" value="'+esc(item['default_size']||'')+'"></div>' +
+    '<div class="form-group"><label class="form-label">Sizes (name: price)</label><div id="f-sizes">'+sizesHtml+'</div><button class="btn btn-sm btn-outline" onclick="addSizeRow()">+ Add Size</button></div>' +
+    '<div class="form-group"><label class="form-label">Available Toppings (comma-separated IDs)</label><input id="f-toppings" class="form-input" value="'+esc((item['available_toppings']||[]).join(', '))+'"></div>' +
+    '<div class="form-group"><label class="form-label"><input type="checkbox" id="f-available" '+(item['available'] !== false ? 'checked' : '')+'> Available</label></div></div>'
+  );
+}
+
+// ── Add item ──
+function openAddItem(catName) {
+  window._modalAction = 'add_item';
+  window._modalItemId = 'new_' + Date.now();
+  showModal('Add Item to ' + catName,
+    '<div class="form-grid"><div class="form-group"><label class="form-label">ID (slug)</label><input id="f-id" class="form-input" placeholder="e.g. new_burger"></div>' +
+    '<div class="form-group"><label class="form-label">Name</label><input id="f-name" class="form-input" placeholder="Item name"></div>' +
+    '<div class="form-group"><label class="form-label">Description</label><input id="f-desc" class="form-input" placeholder="Description"></div>' +
+    '<div class="form-group"><label class="form-label">Price</label><input id="f-price" type="number" step="0.01" class="form-input" value="0"></div>' +
+    '<div class="form-group"><label class="form-label">Sizes (name: price)</label><div id="f-sizes"></div><button class="btn btn-sm btn-outline" onclick="addSizeRow()">+ Add Size</button></div>' +
+    '<div class="form-group"><label class="form-label">Available Toppings (comma-separated IDs)</label><input id="f-toppings" class="form-input" placeholder="e.g. bacon, extra_cheese"></div>' +
+    '<input type="hidden" id="f-cat" value="'+esc(catName)+'"></div>'
+  );
+}
+
+// ── Add category ──
+function openAddCategory() {
+  window._modalAction = 'add_category';
+  showModal('Add Category',
+    '<div class="form-group"><label class="form-label">Category Name</label><input id="f-name" class="form-input" placeholder="e.g. Salads"></div>'
+  );
+}
+
+// ── Deal edit/add ──
+function openEditDeal(dealId) {
+  window._modalAction = 'update_deal';
+  window._modalItemId = dealId;
+  var deal = (window._menuData['deals']||[]).find(function(d) { return d['id'] === dealId; });
+  if (!deal) return;
+  showModal('Edit Deal',
+    '<div class="form-grid"><div class="form-group"><label class="form-label">Name</label><input id="f-name" class="form-input" value="'+esc(deal['name'])+'"></div>' +
+    '<div class="form-group"><label class="form-label">Description</label><input id="f-desc" class="form-input" value="'+esc(deal['description']||'')+'"></div>' +
+    '<div class="form-group"><label class="form-label">Price</label><input id="f-price" type="number" step="0.01" class="form-input" value="'+deal['price']+'"></div></div>'
+  );
+}
+function openAddDeal() {
+  window._modalAction = 'add_deal';
+  window._modalItemId = 'new_deal_' + Date.now();
+  showModal('Add Deal',
+    '<div class="form-grid"><div class="form-group"><label class="form-label">ID (slug)</label><input id="f-id" class="form-input" placeholder="e.g. meal_combo"></div>' +
+    '<div class="form-group"><label class="form-label">Name</label><input id="f-name" class="form-input" placeholder="Deal name"></div>' +
+    '<div class="form-group"><label class="form-label">Description</label><input id="f-desc" class="form-input" placeholder="Description"></div>' +
+    '<div class="form-group"><label class="form-label">Price</label><input id="f-price" type="number" step="0.01" class="form-input" value="0"></div></div>'
+  );
+}
+
+// ── Topping edit/add ──
+function openEditTopping(topId) {
+  window._modalAction = 'update_topping';
+  window._modalItemId = topId;
+  var top = (window._menuData['toppings']||[]).find(function(t) { return t['id'] === topId; });
+  if (!top) return;
+  showModal('Edit Topping',
+    '<div class="form-grid"><div class="form-group"><label class="form-label">Name</label><input id="f-name" class="form-input" value="'+esc(top['name'])+'"></div>' +
+    '<div class="form-group"><label class="form-label">Category</label><input id="f-cat" class="form-input" value="'+esc(top['category']||'')+'"></div>' +
+    '<div class="form-group"><label class="form-label">Price</label><input id="f-price" type="number" step="0.01" class="form-input" value="'+top['price']+'"></div></div>'
+  );
+}
+function openAddTopping() {
+  window._modalAction = 'add_topping';
+  window._modalItemId = 'new_top_' + Date.now();
+  showModal('Add Topping',
+    '<div class="form-grid"><div class="form-group"><label class="form-label">ID (slug)</label><input id="f-id" class="form-input" placeholder="e.g. jalapenos"></div>' +
+    '<div class="form-group"><label class="form-label">Name</label><input id="f-name" class="form-input" placeholder="Topping name"></div>' +
+    '<div class="form-group"><label class="form-label">Category</label><input id="f-cat" class="form-input" placeholder="e.g. Veggie"></div>' +
+    '<div class="form-group"><label class="form-label">Price</label><input id="f-price" type="number" step="0.01" class="form-input" value="0"></div></div>'
+  );
+}
+
+// ── Save modal ──
+function saveModal() {
+  var action = window._modalAction;
+  var data = { item_id: window._modalItemId };
+  var name = (document.getElementById('f-name')||{}).value || '';
+  var desc = (document.getElementById('f-desc')||{}).value || '';
+  var price = parseFloat((document.getElementById('f-price')||{}).value) || 0;
+  var catName = (document.getElementById('f-cat')||{}).value || '';
+  var available = (document.getElementById('f-available')||{}).checked;
+
+  if (action === 'add_category') {
+    data = { item_id: name.toLowerCase().replace(/\\s+/g,'_'), value: name };
+  } else if (action.startsWith('add_') || action.startsWith('update_')) {
+    var sizes = {};
+    document.querySelectorAll('.size-key').forEach(function(k, i) {
+      var v = document.querySelectorAll('.size-val')[i];
+      if (k.value && v.value) sizes[k.value] = parseFloat(v.value) || 0;
+    });
+    var toppingIds = ((document.getElementById('f-toppings')||{}).value || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var defSize = (document.getElementById('f-default-size')||{}).value || '';
+
+    var itemData = { name: name, description: desc, price: price };
+    if (action.includes('item')) {
+      if (Object.keys(sizes).length > 0) { itemData['sizes'] = sizes; delete itemData.price; }
+      if (defSize) itemData['default_size'] = defSize;
+      if (toppingIds.length > 0) itemData['available_toppings'] = toppingIds;
+      itemData['available'] = available;
+      if (action === 'add_item') itemData['id'] = (document.getElementById('f-id')||{}).value || window._modalItemId;
+    }
+    if (action.includes('deal')) { itemData['id'] = (document.getElementById('f-id')||{}).value || window._modalItemId; }
+    if (action.includes('topping')) {
+      itemData['id'] = (document.getElementById('f-id')||{}).value || window._modalItemId;
+      if (catName) itemData['category'] = catName;
+    }
+    data = { item_id: window._modalItemId, value: itemData };
+    if (action === 'add_item') data.extra = { category_name: catName };
+  }
+
+  api(action, data).then(function(msg) {
+    window.showToast(msg.replace(/<[^>]*>/g,''), 'success');
+    closeModal();
+    setTimeout(function() { window.location.reload(); }, 800);
+  }).catch(function(err) {
+    window.showToast(err.message.replace(/<[^>]*>/g,''), 'error');
+  });
+}
+
+// ── Delete ──
+function deleteItem(id) { if(confirm('Delete this item?')) api('remove_item',{item_id:id}).then(function(){window.location.reload();}); }
+function deleteDeal(id) { if(confirm('Delete this deal?')) api('remove_deal',{item_id:id}).then(function(){window.location.reload();}); }
+function deleteTopping(id) { if(confirm('Delete this topping?')) api('remove_topping',{item_id:id}).then(function(){window.location.reload();}); }
+
+function addSizeRow() {
+  var div = document.createElement('div');
+  div.style.cssText = 'display:flex;gap:4px;margin:2px 0;';
+  div.innerHTML = '<input placeholder="size name" class="size-key" style="flex:1;padding:6px;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;"><input type="number" step="0.01" placeholder="price" class="size-val" style="flex:1;padding:6px;background:#16191e;border:1px solid #2a2d35;border-radius:4px;color:#e5e7eb;"><button class="btn btn-sm btn-ghost" style="color:#ef4444;" onclick="this.parentElement.remove()">✕</button>';
+  document.getElementById('f-sizes').appendChild(div);
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 </script>
 {% endblock %}

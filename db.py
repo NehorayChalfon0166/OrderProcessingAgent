@@ -25,6 +25,7 @@ from peewee import (
 )
 
 from session import OrderSession
+from utils import generate_order_id
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +234,6 @@ class Database:
 
         Returns the generated order_id.
         """
-        import uuid as _uuid
         from datetime import datetime as _dt, timezone as _tz
 
         ot = session.customer.order_type
@@ -242,11 +242,7 @@ class Database:
         ot = ot or "pickup"
         subtotal, delivery_fee, total = pricing.compute_totals(session.cart, session.customer.order_type)
 
-        ts = _dt.now(_tz.utc)
-        order_id = (
-            f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_"
-            f"{str(_uuid.uuid4())[:6]}"
-        )
+        order_id = generate_order_id(session.restaurant_id)
 
         payload = {
             "order_id": order_id,
@@ -487,14 +483,6 @@ class Database:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _conversation_to_json(session: OrderSession) -> str:
-    """Serialize conversation to JSON string."""
-    return json.dumps(
-        [msg.model_dump() for msg in session.conversation],
-        default=str,
-    )
 
 
 def _order_row_to_dict(row: OrderRow) -> dict:

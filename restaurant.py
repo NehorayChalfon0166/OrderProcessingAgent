@@ -14,6 +14,7 @@ from pathlib import Path
 
 from catalogue import Catalogue
 from pricing import PricingEngine
+from utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class RestaurantRegistry:
             FileNotFoundError: If the config file does not exist.
             ValueError: If a restaurant is missing its twilio_phone.
         """
+        self._path = path
         self._by_id: dict[str, RestaurantContext] = {}
         self._by_phone: dict[str, RestaurantContext] = {}
         self._configs: list[RestaurantConfig] = []
@@ -125,21 +127,11 @@ class RestaurantRegistry:
         return list(self._configs)
 
     def reload(self) -> None:
-        """Reload all restaurants from the config file.
-
-        Used after adding a new restaurant via the dashboard so it
-        appears without a server restart.
-        """
+        """Reload all restaurants from the config file."""
         self._by_id.clear()
         self._by_phone.clear()
         self._configs.clear()
-        # Re-derive the config path from the first load — we store it.
-        # Since we don't store the path, we rebuild from what we have.
-        # This is called from the dashboard after save_restaurant writes
-        # the updated file, so we re-read from the same path.
-        # We need to store the path.  For now, find it through the
-        # first context's menu_path relative to cwd.
-        self._load("restaurants.json")
+        self._load(self._path)
 
     def reload_restaurant(self, restaurant_id: str) -> None:
         """Hot-reload one restaurant's Catalogue and PricingEngine.
@@ -180,16 +172,18 @@ class RestaurantRegistry:
 
         for rid, data in restaurants.items():
             config = self._parse_config(rid, data)
+            try:
+                catalogue = Catalogue(config.menu_path)
+                pricing = PricingEngine(catalogue.menu_data)
+            except Exception as e:
+                logger.error(
+                    "Failed to load menu for '%s' (%s): %s — skipping this restaurant",
+                    rid, config.menu_path, e,
+                )
+                continue
+
             self._configs.append(config)
-
-            catalogue = Catalogue(config.menu_path)
-            pricing = PricingEngine(catalogue.menu_data)
-            ctx = RestaurantContext(
-                config=config,
-                catalogue=catalogue,
-                pricing=pricing,
-            )
-
+            ctx = RestaurantContext(config=config, catalogue=catalogue, pricing=pricing)
             self._by_id[config.id] = ctx
             self._by_phone[config.twilio_phone] = ctx
             logger.info(
@@ -299,7 +293,7 @@ def save_restaurant(
     }
     raw["restaurants"] = restaurants
 
-    _atomic_write(config_path, raw)
+    atomic_write_json(config_path, raw)
 
     # Auto-create blank menu for new restaurants
     if is_new and not menu_full.exists():
@@ -317,22 +311,3 @@ def save_restaurant(
     else:
         action = "Added" if is_new else "Updated"
         return f"{action} restaurant '{restaurant_id}'. Restart server to apply."
-
-
-def _atomic_write(path: Path, data: dict) -> None:
-    """Write JSON data to *path* atomically via temp file + rename."""
-    import os as _os
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        fd = _os.open(str(tmp), _os.O_RDONLY)
-        _os.fsync(fd)
-        _os.close(fd)
-        _os.replace(str(tmp), str(path))
-    except Exception:
-        if tmp.exists():
-            tmp.unlink()
-        raise
