@@ -266,6 +266,7 @@ def set_customer_info(
     order_type: str | None = None,
 ) -> SetCustomerInfoResult:
     # Merge — only non-None values overwrite
+    missing: list[str] = []
     if name is not None:
         session.customer.name = name
     if phone is not None:
@@ -287,7 +288,6 @@ def set_customer_info(
             )
 
     # What's still required?
-    missing: list[str] = []
     if not session.customer.name:
         missing.append("name")
     if not session.customer.phone:
