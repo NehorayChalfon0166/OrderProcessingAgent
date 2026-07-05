@@ -162,22 +162,6 @@ class TestDealLookup:
         assert catalogue.find_deal("nonexistent") is None
 
 
-class TestDealExpansion:
-    def test_family_deal_expands(self, catalogue):
-        deal = catalogue.find_deal("Family Deal")
-        items = catalogue.expand_deal(deal)
-        assert len(items) == 5  # 2 pizzas + 1 side + 2 drinks
-        assert all(isinstance(item.missing_options, list) for item in items)
-        assert all(len(item.missing_options) > 0 for item in items)
-
-    def test_expanded_items_are_deal_branded(self, catalogue):
-        deal = catalogue.find_deal("Family Deal")
-        items = catalogue.expand_deal(deal)
-        for item in items:
-            assert deal.name in item.name
-            assert item.product_id.startswith("deal:deal_family:")
-
-
 class TestHints:
     def test_get_hints_returns_string(self, catalogue):
         hints = catalogue.get_hints()

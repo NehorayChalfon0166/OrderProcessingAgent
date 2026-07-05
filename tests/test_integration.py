@@ -202,8 +202,6 @@ with tempfile.TemporaryDirectory() as tmpdir:
     deal = catalogue.find_deal("Family Deal")
     check("finds deal by name", deal is not None)
     check("deal has correct price", deal.price == 34.99)
-    expanded = catalogue.expand_deal(deal)
-    check("deal expands to items (2 pizzas + 1 side + 2 drinks = 5)", len(expanded) == 5)
 
     # --- Catalogue: hints ---
     print("\n-- Catalogue: hints --")
@@ -586,8 +584,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
     import inspect
     sig = inspect.signature(process_turn)
     params = list(sig.parameters.keys())
-    check("process_turn takes session, user_message, catalogue, pricing, llm_client",
-          params == ["session", "user_message", "catalogue", "pricing", "llm_client"])
+    check("process_turn takes session, user_message, catalogue, pricing, llm_client (+ optional max_iterations)",
+          params == ["session", "user_message", "catalogue", "pricing", "llm_client", "max_iterations"])
 
 
 # =============================================================================
@@ -653,7 +651,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     # --- Edge: whitespace in phone ---
     print("\n-- Edge: whitespace handling --")
     ctx = registry.get_by_twilio_phone("  +1111111111  ")
-    check("whitespace NOT stripped (exact match required)", ctx is None)
+    check("whitespace IS stripped (leading/trailing ignored)", ctx is not None)
 
     # --- Edge: empty string phone ---
     check("empty phone returns None", registry.get_by_twilio_phone("") is None)

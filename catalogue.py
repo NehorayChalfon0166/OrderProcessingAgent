@@ -4,7 +4,7 @@ Evolution of v1's menu_manager.py. The fuzzy matching core is preserved.
 What changed:
 - format_menu_for_prompt() → get_hints() (radically smaller output)
 - validate_extracted_item() monolith → resolve_size() + resolve_toppings()
-- Deals got first-class support via expand_deal()
+- Deals registered as flat-price products for add_to_cart compatibility
 - ExtractedItem is gone — tools pass typed parameters directly
 """
 
@@ -159,8 +159,8 @@ class Catalogue:
             self._toppings_by_name[td.name.lower()] = td
 
         # Deals — registered as regular products so find_product / add_to_cart
-        # work without special-casing. DealDef is kept for expand_deal() if
-        # needed later, but add_to_cart uses the ProductDef path.
+        # work without special-casing. Deals appear as single line items
+        # with a flat price.
         for deal in self._menu_data.get("deals", []):
             dd = DealDef(
                 id=deal["id"],
@@ -232,6 +232,12 @@ class Catalogue:
     # ------------------------------------------------------------------
 
     @staticmethod
+    @staticmethod
+    def _normalize(s: str) -> str:
+        """Normalize a string for fuzzy matching — lowercase, strip quotes."""
+        return s.lower().strip().replace("’", "").replace("’", "").replace(""", "").replace(""", "")
+
+    @staticmethod
     def _fuzzy_best_match(query: str, index: dict[str, object]) -> object | None:
         """Fuzzy lookup against a name→object index.
 
@@ -240,24 +246,26 @@ class Catalogue:
           2. Substring (query in key, or key in query)
           3. difflib similarity ≥ 80% (handles typos, plurals, etc.)
         """
-        q = query.lower().strip()
-        # Strip common punctuation for exact/substring matching
-        q_norm = q.replace("’", "").replace("’", "")
+        q_norm = Catalogue._normalize(query)
+
+        # Build a normalized-key index so apostrophes/smart-quotes
+        # in product names don’t prevent matching.
+        norm_index = {Catalogue._normalize(k): v for k, v in index.items()}
 
         # 1. Exact
-        if q_norm in index:
-            return index[q_norm]
+        if q_norm in norm_index:
+            return norm_index[q_norm]
 
-        # 2. Substring
-        for key, value in index.items():
-            if q_norm in key or key in q_norm:
+        # 2. Substring (check against normalized keys)
+        for key_norm, value in norm_index.items():
+            if q_norm in key_norm or key_norm in q_norm:
                 return value
 
-        # 3. difflib
+        # 3. difflib (compare normalized strings)
         best_score = 0.0
         best_value = None
-        for key, value in index.items():
-            score = difflib.SequenceMatcher(None, q_norm, key).ratio()
+        for key_norm, value in norm_index.items():
+            score = difflib.SequenceMatcher(None, q_norm, key_norm).ratio()
             if score > best_score:
                 best_score = score
                 best_value = value
@@ -349,50 +357,6 @@ class Catalogue:
             )
 
         return resolved, issues
-
-    # ------------------------------------------------------------------
-    # Deal Expansion
-    # ------------------------------------------------------------------
-
-    def expand_deal(self, deal: DealDef) -> list[CartItem]:
-        """Expand a deal template into constituent cart items.
-
-        Each resulting item has missing_options set for choices the user
-        must still make (which pizza? which side? etc.).
-        """
-        items: list[CartItem] = []
-        includes = deal.includes
-
-        for category_key, spec in includes.items():
-            qty = spec.get("quantity", 1)
-            forced_size = spec.get("size")
-
-            for _ in range(qty):
-                # Find matching category
-                category_name = self._category_key_to_name(category_key)
-                items.append(
-                    CartItem(
-                        product_id=f"deal:{deal.id}:{category_key}",
-                        name=f"{deal.name} — {category_name}",
-                        category=category_name,
-                        quantity=1,
-                        size=forced_size,
-                        missing_options=[f"Choose a {category_name.lower()} for your {deal.name}"],
-                    )
-                )
-
-        return items
-
-    def _category_key_to_name(self, key: str) -> str:
-        """Map deal 'includes' keys to category names."""
-        # Plural key → singular category name from the menu
-        mapping = {
-            "pizzas": "Pizza",
-            "sides": "Side",
-            "drinks": "Drink",
-            "desserts": "Dessert",
-        }
-        return mapping.get(key, key.capitalize())
 
     # ------------------------------------------------------------------
     # Prompt Hints

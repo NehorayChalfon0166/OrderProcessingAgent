@@ -50,9 +50,9 @@
       </div>
 
       <div class="card-actions">
-        <a href="/orders?restaurant_id={{ s.config.id }}{{ '&token=' ~ token if token }}" class="btn btn-sm btn-outline">View Orders</a>
-        <a href="/menu/{{ s.config.id }}{{ token_url }}" class="btn btn-sm btn-outline">View Menu</a>
-        <a href="/sessions?restaurant_id={{ s.config.id }}{{ '&token=' ~ token if token }}" class="btn btn-sm btn-outline">Sessions</a>
+        <a href="/orders?restaurant_id={{ s.config.id }}" class="btn btn-sm btn-outline">View Orders</a>
+        <a href="/menu/{{ s.config.id }}" class="btn btn-sm btn-outline">View Menu</a>
+        <a href="/sessions?restaurant_id={{ s.config.id }}" class="btn btn-sm btn-outline">Sessions</a>
       </div>
     </div>
   </div>
@@ -73,7 +73,7 @@
     <h3 class="card-title">Add New Restaurant</h3>
   </div>
   <div class="card-body">
-    <form data-restaurant-form action="/restaurants/add{{ token_url }}" method="POST">
+    <form data-restaurant-form action="/restaurants/add" method="POST">
       <div class="form-grid">
         <div class="form-group">
           <label class="form-label" for="restaurant_id">Restaurant ID</label>

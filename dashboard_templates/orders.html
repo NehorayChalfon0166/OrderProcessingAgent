@@ -68,7 +68,7 @@
     </thead>
     <tbody>
       {% for order in orders %}
-      <tr class="clickable-row" data-href="/orders/{{ order.order_id }}{{ token_url }}">
+      <tr class="clickable-row" data-href="/orders/{{ order.order_id }}">
         <td>
           <span class="order-id-display">{{ order.order_id[:12] }}…</span>
           <button class="copy-btn" data-copy="{{ order.order_id }}" title="Copy full ID" onclick="event.stopPropagation()">📋</button>

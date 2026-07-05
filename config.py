@@ -27,6 +27,7 @@ class AppConfig:
     llm_api_key: str
     llm_model: str = "deepseek-v4-flash"
     llm_base_url: str = "https://api.deepseek.com"
+    llm_temperature: float = 0.3
 
     # Paths
     restaurants_path: str = "restaurants.json"
@@ -63,6 +64,7 @@ class AppConfig:
             llm_api_key=api_key,
             llm_model=os.getenv("LLM_MODEL", "deepseek-v4-flash"),
             llm_base_url=os.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
+            llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.3")),
             restaurants_path=os.getenv("RESTAURANTS_PATH", "restaurants.json"),
             db_path=os.getenv("DB_PATH", "order_agent.db"),
             orders_dir=os.getenv("ORDERS_DIR", "orders"),
@@ -102,3 +104,15 @@ class AppConfig:
                 "LLM_BASE_URL is required. Set it in your .env file or as an "
                 "environment variable."
             )
+
+        # Warn if configured paths don't exist (non-fatal — paths may be
+        # created at runtime, e.g. menus/ on first restaurant creation).
+        import logging
+        _log = logging.getLogger(__name__)
+        for attr, label in [
+            ("restaurants_path", "Restaurants config"),
+            ("orders_dir", "Orders directory"),
+        ]:
+            path = getattr(self, attr, "")
+            if path and not os.path.exists(path):
+                _log.warning("%s not found: %s", label, path)

@@ -49,75 +49,107 @@ def init_dashboard(config: AppConfig) -> None:
         logger.warning("API_TOKEN not set — dashboard open without auth")
 
 
+def _require_init() -> tuple[Database, RestaurantRegistry]:
+    """Verify the dashboard has been initialised. Raises 500 if not."""
+    if _db is None or _registry is None or _templates is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Dashboard not initialised — call init_dashboard() first.",
+        )
+    return _db, _registry
+
+
 def _check_token(request: Request) -> None:
     if not _api_token:
         return
-    token = request.query_params.get("token") or request.headers.get("Authorization", "").removeprefix("Bearer ")
-    if not token or token != _api_token:
-        raise HTTPException(status_code=403, detail="Invalid or missing token")
-
-
-def _token_url(request: Request) -> str:
-    """Return ?token=xxx for appending to URLs, or empty string."""
-    t = request.query_params.get("token", "")
-    return f"?token={t}" if t else ""
+    # Check cookie first (set on first query-param access)
+    token = request.cookies.get("dashboard_token")
+    if token and token == _api_token:
+        return
+    # Fall back to query param (initial access, bookmarked URL)
+    token = request.query_params.get("token")
+    if token and token == _api_token:
+        return
+    # Fall back to Authorization header (API-style access)
+    token = (request.headers.get("Authorization", "") or "").removeprefix("Bearer ")
+    if token and token == _api_token:
+        return
+    raise HTTPException(status_code=403, detail="Invalid or missing token")
 
 
 def _render(request: Request, name: str, **ctx) -> HTMLResponse:
-    assert _templates is not None
+    _db, _registry = _require_init()
     raw_token = request.query_params.get("token", "")
-    return _templates.TemplateResponse(request, name, {
+    response = _templates.TemplateResponse(request, name, {
         "request": request,
-        "token_url": _token_url(request),
+        "token_url": "",
         "token": raw_token,
         "registry": _registry,
         **ctx,
     })
+    # On first access via query param, set a cookie so subsequent
+    # navigation doesn't leak the token in URLs.
+    if raw_token and raw_token == _api_token:
+        response.set_cookie(
+            key="dashboard_token",
+            value=raw_token,
+            httponly=True,
+            samesite="lax",
+            max_age=86400,  # 24 hours
+        )
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)
 async def overview(request: Request):
     _check_token(request)
-    assert _db is not None and _registry is not None
+    db, registry = _require_init()
     stats = []
-    for r in _registry.list_restaurants():
-        orders = _db.get_orders(r.id, limit=100)
-        unprinted = _db.get_unprinted_orders(r.id)
-        stats.append({"config": r, "order_count": len(orders), "unprinted_count": len(unprinted)})
+    for r in registry.list_restaurants():
+        orders = db.get_orders(r.id, limit=100)
+        unprinted = db.get_unprinted_orders(r.id)
+        active = len(db.list_active_sessions(r.id, limit=200))
+        stats.append({
+            "config": r,
+            "order_count": len(orders),
+            "unprinted_count": len(unprinted),
+            "active_sessions": active,
+        })
     return _render(request, "overview.html", stats=stats)
 
 
 @app.get("/orders", response_class=HTMLResponse)
 async def list_orders(request: Request, restaurant_id: str = "", limit: int = Query(default=50, le=500), order_type: str = "", payment_method: str = ""):
     _check_token(request)
-    assert _db is not None
+    db, registry = _require_init()
     all_orders = []
     if restaurant_id:
-        all_orders = _db.get_orders(restaurant_id, limit=limit)
-    elif _registry:
-        for r in _registry.list_restaurants():
-            all_orders.extend(_db.get_orders(r.id, limit=limit))
+        all_orders = db.get_orders(restaurant_id, limit=limit)
+    else:
+        for r in registry.list_restaurants():
+            all_orders.extend(db.get_orders(r.id, limit=limit))
     all_orders.sort(key=lambda o: o.get("created_at", ""), reverse=True)
     all_orders = all_orders[:limit]
     if order_type:
         all_orders = [o for o in all_orders if o.get("order_type") == order_type]
     if payment_method:
         all_orders = [o for o in all_orders if o.get("payment_method") == payment_method]
-    restaurants = _registry.list_restaurants() if _registry else []
+    restaurants = registry.list_restaurants()
     return _render(request, "orders.html", orders=all_orders, restaurants=restaurants, filters={"restaurant_id": restaurant_id, "order_type": order_type, "payment_method": payment_method, "limit": limit})
 
 
 @app.get("/orders/{order_id}", response_class=HTMLResponse)
 async def order_detail(request: Request, order_id: str):
     _check_token(request)
-    assert _db is not None
+    db, registry = _require_init()
     order = None
-    if _registry:
-        for r in _registry.list_restaurants():
-            for o in _db.get_orders(r.id, limit=500):
-                if o.get("order_id") == order_id:
-                    order = o; break
-            if order: break
+    for r in registry.list_restaurants():
+        for o in db.get_orders(r.id, limit=500):
+            if o.get("order_id") == order_id:
+                order = o
+                break
+        if order:
+            break
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return _render(request, "order_detail.html", order=order)
@@ -126,27 +158,46 @@ async def order_detail(request: Request, order_id: str):
 @app.get("/sessions", response_class=HTMLResponse)
 async def list_sessions(request: Request, restaurant_id: str = "", limit: int = Query(default=50, le=200)):
     _check_token(request)
-    assert _db is not None and _registry is not None
-    sessions = []
-    for r in _registry.list_restaurants():
-        if restaurant_id and r.id != restaurant_id: continue
-        for o in _db.get_orders(r.id, limit=limit):
-            if o.get("printed") is False:
-                sessions.append({"session_id": o.get("session_id","?"), "restaurant_id": r.id, "customer_name": o.get("customer_name","Unknown"), "customer_phone": o.get("customer_phone",""), "order_id": o.get("order_id"), "updated_at": o.get("created_at")})
-    restaurants = _registry.list_restaurants()
-    return _render(request, "sessions.html", sessions=sessions[:limit], restaurants=restaurants, filters={"restaurant_id": restaurant_id})
+    db, registry = _require_init()
+    active = db.list_active_sessions(
+        restaurant_id=restaurant_id or None, limit=limit
+    )
+    sessions = [
+        {
+            "session_id": s.session_id,
+            "restaurant_id": s.restaurant_id,
+            "customer_name": s.customer.name or "Unknown",
+            "customer_phone": s.customer.phone or "",
+            "state": s.state.value if hasattr(s.state, 'value') else s.state,
+            "updated_at": s.updated_at,
+        }
+        for s in active
+    ]
+    restaurants = registry.list_restaurants()
+    return _render(request, "sessions.html", sessions=sessions, restaurants=restaurants, filters={"restaurant_id": restaurant_id})
 
 
 @app.get("/sessions/{session_id}", response_class=HTMLResponse)
 async def session_detail(request: Request, session_id: str):
     _check_token(request)
-    assert _db is not None and _registry is not None
-    session_data = None; restaurant_name = ""
-    for r in _registry.list_restaurants():
-        s = _db.load_session(r.id, session_id)
+    db, registry = _require_init()
+    session_data = None
+    restaurant_name = ""
+    for r in registry.list_restaurants():
+        s = db.load_session(r.id, session_id)
         if s is not None:
-            session_data = {"session_id": s.session_id, "restaurant_id": s.restaurant_id, "state": s.state.value, "cart": [item.model_dump() for item in s.cart], "customer": s.customer.model_dump(), "conversation": [msg.model_dump() for msg in s.conversation], "updated_at": s.updated_at}
-            restaurant_name = r.name; break
+            state_value = s.state.value if hasattr(s.state, 'value') else s.state
+            session_data = {
+                "session_id": s.session_id,
+                "restaurant_id": s.restaurant_id,
+                "state": state_value,
+                "cart": [item.model_dump() for item in s.cart],
+                "customer": s.customer.model_dump(),
+                "conversation": [msg.model_dump() for msg in s.conversation],
+                "updated_at": s.updated_at,
+            }
+            restaurant_name = r.name
+            break
     if session_data is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return _render(request, "session_detail.html", session=session_data, restaurant_name=restaurant_name)
@@ -155,18 +206,20 @@ async def session_detail(request: Request, session_id: str):
 @app.get("/menu/{restaurant_id}", response_class=HTMLResponse)
 async def view_menu(request: Request, restaurant_id: str):
     _check_token(request)
-    assert _registry is not None
-    ctx = _registry.get_by_id(restaurant_id)
-    if ctx is None: raise HTTPException(status_code=404, detail="Restaurant not found")
+    _db, registry = _require_init()
+    ctx = registry.get_by_id(restaurant_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
     return _render(request, "menu_editor.html", restaurant_id=restaurant_id, restaurant_name=ctx.config.name, menu=ctx.catalogue.menu_data)
 
 
 @app.post("/menu/{restaurant_id}/edit")
 async def edit_menu(request: Request, restaurant_id: str):
     _check_token(request)
-    assert _registry is not None
-    ctx = _registry.get_by_id(restaurant_id)
-    if ctx is None: raise HTTPException(status_code=404, detail="Restaurant not found")
+    _db, registry = _require_init()
+    ctx = registry.get_by_id(restaurant_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
     from menu_manager import MenuAction, manage_menu
     form = await request.form()
     action_type = str(form.get("action", ""))
@@ -174,10 +227,15 @@ async def edit_menu(request: Request, restaurant_id: str):
     variant = str(form.get("variant", "")) or None
     value = str(form.get("value", "")) or None
     if action_type == "set_price" and value:
-        try: value = float(value)
-        except ValueError: return HTMLResponse("<p style='color:red'>Invalid price</p>", status_code=400)
+        try:
+            value = float(value)
+        except ValueError:
+            return HTMLResponse("<p style='color:red'>Invalid price</p>", status_code=400)
     result = manage_menu(ctx.config.menu_path, [MenuAction(action=action_type, item_id=item_id, variant_id=variant, value=value)])
     if result.success:
+        # Hot-reload: rebuild Catalogue and PricingEngine so the menu
+        # editor shows updated data without a server restart.
+        registry.reload_restaurant(restaurant_id)
         return HTMLResponse(f"<p style='color:green'>✅ {result.message}</p>")
     return HTMLResponse("<p style='color:red'>" + "<br>".join(result.errors) + "</p>", status_code=400)
 
@@ -185,13 +243,12 @@ async def edit_menu(request: Request, restaurant_id: str):
 @app.get("/restaurants", response_class=HTMLResponse)
 async def list_restaurants(request: Request):
     _check_token(request)
-    assert _registry is not None
-    configs = _registry.list_restaurants()
-    assert _db is not None
+    db, registry = _require_init()
+    configs = registry.list_restaurants()
     stats = []
     for r in configs:
-        orders = _db.get_orders(r.id, limit=30)
-        unprinted = _db.get_unprinted_orders(r.id)
+        orders = db.get_orders(r.id, limit=30)
+        unprinted = db.get_unprinted_orders(r.id)
         stats.append({"config": r, "order_count": len(orders), "unprinted_count": len(unprinted)})
     return _render(request, "restaurants.html", stats=stats)
 
@@ -199,7 +256,7 @@ async def list_restaurants(request: Request):
 @app.post("/restaurants/add")
 async def add_restaurant(request: Request):
     _check_token(request)
-    assert _registry is not None
+    _db, registry = _require_init()
     from restaurant import save_restaurant
     form = await request.form()
     rid = str(form.get("restaurant_id", ""))
@@ -208,6 +265,8 @@ async def add_restaurant(request: Request):
     owner = str(form.get("owner", ""))
     try:
         msg = save_restaurant(_restaurants_path, rid, name=name, twilio_phone=phone, owner_phone=owner)
+        # Reload registry so the new restaurant appears immediately.
+        registry.reload()
         return HTMLResponse(f"<p style='color:green'>✅ {msg}</p>")
     except (ValueError, FileNotFoundError) as e:
         return HTMLResponse(f"<p style='color:red'>❌ {e}</p>", status_code=400)

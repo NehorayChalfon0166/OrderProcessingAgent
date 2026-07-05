@@ -8,6 +8,7 @@ functions.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -20,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 # Retry configuration
 _MAX_RETRIES = 3
-_RETRY_BACKOFF = [1.0, 3.0, 9.0]  # seconds per attempt
 _RETRYABLE_STATUSES = frozenset({429, 503})
 
 
@@ -36,6 +36,7 @@ class LLMClient:
 
     def __init__(self, config: AppConfig) -> None:
         self._model = config.llm_model
+        self._temperature = config.llm_temperature
         self._client = OpenAI(
             api_key=config.llm_api_key,
             base_url=config.llm_base_url,
@@ -74,7 +75,7 @@ class LLMClient:
             except (APIConnectionError, APITimeoutError) as e:
                 last_exc = e
                 if attempt < _MAX_RETRIES - 1:
-                    delay = _RETRY_BACKOFF[attempt]
+                    delay = 2.0 ** attempt  # 1s, 2s, 4s
                     logger.warning(
                         "LLM %s on attempt %d/%d, retrying in %.1fs: %s",
                         type(e).__name__, attempt + 1, _MAX_RETRIES, delay, e,
@@ -83,7 +84,7 @@ class LLMClient:
             except APIStatusError as e:
                 if e.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES - 1:
                     last_exc = e
-                    delay = _RETRY_BACKOFF[attempt]
+                    delay = 2.0 ** attempt  # 1s, 2s, 4s
                     logger.warning(
                         "LLM HTTP %d on attempt %d/%d, retrying in %.1fs",
                         e.status_code, attempt + 1, _MAX_RETRIES, delay,
@@ -110,7 +111,7 @@ class LLMClient:
         kwargs: dict = {
             "model": self._model,
             "messages": messages,
-            "temperature": 0.3,
+            "temperature": self._temperature,
         }
         if tools:
             kwargs["tools"] = tools
@@ -141,8 +142,6 @@ class LLMClient:
             return []
         result: list[ToolCallRequest] = []
         for tc in raw:
-            import json
-
             args = {}
             try:
                 args = json.loads(tc.function.arguments)
@@ -201,7 +200,6 @@ def messages_to_openai(conversation: list[Message]) -> list[dict]:
 
 def _dict_to_json(d: dict) -> str:
     """Serialize a dict to JSON for tool call arguments."""
-    import json
     return json.dumps(d, ensure_ascii=False)
 
 

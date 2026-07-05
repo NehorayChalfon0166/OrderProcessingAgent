@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,8 +127,17 @@ def save_order(
     ot = session.customer.order_type or OrderType.PICKUP
     subtotal, delivery_fee, total = pricing.compute_totals(session.cart, ot)
 
+    # Generate a unique order ID — not the session_id (phone number),
+    # which would collide on repeat orders from the same customer.
+    ts = datetime.now(timezone.utc)
+    order_id = (
+        f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_"
+        f"{str(uuid.uuid4())[:6]}"
+    )
+
     payload = {
-        "order_id": session.session_id,
+        "order_id": order_id,
+        "session_id": session.session_id,
         "restaurant_id": session.restaurant_id,
         "restaurant": restaurant_name,
         "items": [item.model_dump() for item in session.cart],
@@ -136,13 +146,13 @@ def save_order(
         "delivery_fee": delivery_fee,
         "total": total,
         "order_type": ot.value,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "payment_method": session.payment_method or "cash",
+        "timestamp": ts.isoformat(),
     }
 
     order_dir = Path(orders_dir) / session.restaurant_id
     order_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{session.session_id}_{ts}.json"
+    filename = f"{order_id}.json"
     filepath = order_dir / filename
     filepath.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return str(filepath)

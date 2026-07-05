@@ -62,11 +62,12 @@ class SessionRow(BaseModel):
 class OrderRow(BaseModel):
     """A completed order — written once, never mutated."""
 
-    id = TextField(primary_key=True)  # {restaurant_id}_{phone}_{ts}
+    id = TextField(primary_key=True)  # unique order ID
     restaurant_id = TextField()
     session_id = TextField()
     customer_name = TextField(null=True)
     customer_phone = TextField(null=True)
+    customer_address = TextField(null=True)
     items = TextField(default="[]")          # JSON: list[CartItem]
     subtotal = TextField()                   # stored as text, cast on read
     delivery_fee = TextField()
@@ -122,23 +123,16 @@ class Database:
             "session_id": session.session_id,
             "restaurant_id": session.restaurant_id,
             "state": session.state.value,
-            "cart": session.model_dump_json(
-                include={"cart"}, exclude_none=False
-            ),
+            "cart": json.dumps([item.model_dump() for item in session.cart]),
             "customer": session.customer.model_dump_json(exclude_none=False),
-            "conversation": _conversation_to_json(session),
+            "conversation": json.dumps(
+                [msg.model_dump() for msg in session.conversation],
+                default=str,
+            ),
             "payment_method": session.payment_method,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
         }
-        # extract nested JSON fields from the dump
-        data["cart"] = json.dumps([item.model_dump() for item in session.cart])
-        data["customer"] = session.customer.model_dump_json(exclude_none=False)
-        data["conversation"] = json.dumps(
-            [msg.model_dump() for msg in session.conversation],
-            default=str,
-        )
-
         SessionRow.replace(data).execute()
 
     def load_session(
@@ -178,18 +172,45 @@ class Database:
             & (SessionRow.session_id == session_id)
         ).execute()
 
+    def list_active_sessions(
+        self, restaurant_id: str | None = None, limit: int = 50
+    ) -> list[OrderSession]:
+        """Return active (non-terminal) sessions, newest first."""
+        query = SessionRow.select().where(
+            SessionRow.state.not_in(["completed", "cancelled"])
+        )
+        if restaurant_id:
+            query = query.where(SessionRow.restaurant_id == restaurant_id)
+        query = query.order_by(SessionRow.updated_at.desc()).limit(limit)
+        return [
+            OrderSession(
+                session_id=row.session_id,
+                restaurant_id=row.restaurant_id,
+                state=row.state,
+                cart=json.loads(row.cart),
+                customer=json.loads(row.customer),
+                conversation=json.loads(row.conversation),
+                payment_method=row.payment_method,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+            for row in query
+        ]
+
     # ------------------------------------------------------------------
     # Order CRUD
     # ------------------------------------------------------------------
 
     def save_order(self, order_data: dict) -> None:
         """Insert a completed order."""
+        customer = order_data.get("customer", {})
         OrderRow.replace({
             "id": order_data.get("order_id", ""),
             "restaurant_id": order_data.get("restaurant_id", ""),
-            "session_id": order_data.get("order_id", ""),
-            "customer_name": order_data.get("customer", {}).get("name"),
-            "customer_phone": order_data.get("customer", {}).get("phone"),
+            "session_id": order_data.get("session_id", order_data.get("order_id", "")),
+            "customer_name": customer.get("name"),
+            "customer_phone": customer.get("phone"),
+            "customer_address": customer.get("address"),
             "items": json.dumps(order_data.get("items", [])),
             "subtotal": str(order_data.get("subtotal", 0)),
             "delivery_fee": str(order_data.get("delivery_fee", 0)),
@@ -239,9 +260,20 @@ class Database:
     def _create_tables(self) -> None:
         """Create tables if they don't exist."""
         self._db.create_tables([SessionRow, OrderRow], safe=True)
+        # Add customer_address column to existing orders table if needed
+        try:
+            self._db.execute_sql(
+                "ALTER TABLE orders ADD COLUMN customer_address TEXT"
+            )
+        except Exception:
+            pass  # column already exists
 
     def _migrate_if_needed(self) -> None:
-        """One-time migration from legacy JSON files."""
+        """One-time migration from legacy JSON files.
+
+        Supports both flat files (v1 layout) and per-restaurant
+        subdirectories (v2 layout).
+        """
         if SessionRow.select().count() > 0:
             return  # already migrated or fresh start with data
 
@@ -250,22 +282,37 @@ class Database:
             return  # no legacy data to migrate
 
         count = 0
-        for restaurant_dir in sessions_dir.iterdir():
-            if not restaurant_dir.is_dir():
-                continue
-            rid = restaurant_dir.name
-            for session_file in restaurant_dir.glob("*.json"):
+        for entry in sessions_dir.iterdir():
+            if entry.is_dir():
+                # v2: per-restaurant subdirectories
+                rid = entry.name
+                for session_file in entry.glob("*.json"):
+                    try:
+                        session = OrderSession.model_validate_json(
+                            session_file.read_text(encoding="utf-8")
+                        )
+                        session.restaurant_id = rid
+                        self.save_session(session)
+                        count += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to migrate session %s: %s",
+                            session_file, exc,
+                        )
+            elif entry.suffix == ".json":
+                # v1: flat files — infer restaurant from filename or default
                 try:
                     session = OrderSession.model_validate_json(
-                        session_file.read_text(encoding="utf-8")
+                        entry.read_text(encoding="utf-8")
                     )
-                    session.restaurant_id = rid
+                    if not session.restaurant_id:
+                        session.restaurant_id = "default"
                     self.save_session(session)
                     count += 1
                 except Exception as exc:
                     logger.warning(
                         "Failed to migrate session %s: %s",
-                        session_file, exc,
+                        entry, exc,
                     )
 
         if count > 0:
@@ -277,20 +324,31 @@ class Database:
             return
 
         order_count = 0
-        for restaurant_dir in orders_dir.iterdir():
-            if not restaurant_dir.is_dir():
-                continue
-            for order_file in restaurant_dir.glob("*.json"):
+        for entry in orders_dir.iterdir():
+            if entry.is_dir():
+                for order_file in entry.glob("*.json"):
+                    try:
+                        order_data = json.loads(
+                            order_file.read_text(encoding="utf-8")
+                        )
+                        self.save_order(order_data)
+                        order_count += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to migrate order %s: %s",
+                            order_file, exc,
+                        )
+            elif entry.suffix == ".json":
                 try:
                     order_data = json.loads(
-                        order_file.read_text(encoding="utf-8")
+                        entry.read_text(encoding="utf-8")
                     )
                     self.save_order(order_data)
                     order_count += 1
                 except Exception as exc:
                     logger.warning(
                         "Failed to migrate order %s: %s",
-                        order_file, exc,
+                        entry, exc,
                     )
 
         if order_count > 0:
@@ -318,6 +376,7 @@ def _order_row_to_dict(row: OrderRow) -> dict:
         "session_id": row.session_id,
         "customer_name": row.customer_name,
         "customer_phone": row.customer_phone,
+        "customer_address": row.customer_address,
         "items": json.loads(row.items),
         "subtotal": float(row.subtotal),
         "delivery_fee": float(row.delivery_fee),

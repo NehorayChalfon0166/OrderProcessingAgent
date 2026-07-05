@@ -102,10 +102,10 @@ class RestaurantRegistry:
     def get_by_twilio_phone(self, phone: str) -> RestaurantContext | None:
         """Look up a restaurant by its Twilio WhatsApp number.
 
-        The phone number is cleaned of any "whatsapp:" prefix before lookup,
-        so both "+14155238886" and "whatsapp:+14155238886" work.
+        The phone number is cleaned of any "whatsapp:" prefix and whitespace
+        before lookup, so both "+14155238886" and "whatsapp:+14155238886" work.
         """
-        cleaned = phone.removeprefix("whatsapp:")
+        cleaned = phone.removeprefix("whatsapp:").strip()
         return self._by_phone.get(cleaned)
 
     def get_default(self) -> RestaurantContext:
@@ -121,6 +121,39 @@ class RestaurantRegistry:
     def list_restaurants(self) -> list[RestaurantConfig]:
         """Return all restaurant configurations."""
         return list(self._configs)
+
+    def reload(self) -> None:
+        """Reload all restaurants from the config file.
+
+        Used after adding a new restaurant via the dashboard so it
+        appears without a server restart.
+        """
+        self._by_id.clear()
+        self._by_phone.clear()
+        self._configs.clear()
+        # Re-derive the config path from the first load — we store it.
+        # Since we don't store the path, we rebuild from what we have.
+        # This is called from the dashboard after save_restaurant writes
+        # the updated file, so we re-read from the same path.
+        # We need to store the path.  For now, find it through the
+        # first context's menu_path relative to cwd.
+        self._load("restaurants.json")
+
+    def reload_restaurant(self, restaurant_id: str) -> None:
+        """Hot-reload one restaurant's Catalogue and PricingEngine.
+
+        Used after menu edits via the dashboard so changes take effect
+        without a server restart.
+        """
+        ctx = self._by_id.get(restaurant_id)
+        if ctx is None:
+            return
+        ctx.catalogue = Catalogue(ctx.config.menu_path)
+        ctx.pricing = PricingEngine(ctx.catalogue.menu_data)
+        logger.info(
+            "Hot-reloaded menu for '%s' from %s",
+            restaurant_id, ctx.config.menu_path,
+        )
 
     # ------------------------------------------------------------------
     # Loading

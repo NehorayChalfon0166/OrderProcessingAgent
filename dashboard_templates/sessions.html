@@ -38,7 +38,7 @@
       </thead>
       <tbody>
         {% for s in sessions %}
-        <tr class="clickable-row" data-href="/sessions/{{ s.session_id }}{{ token_url }}">
+        <tr class="clickable-row" data-href="/sessions/{{ s.session_id }}">
           <td>
             <code class="id-mono">{{ s.session_id[:12] }}{% if s.session_id | length > 12 %}…{% endif %}</code>
           </td>
@@ -87,7 +87,7 @@
     if (filterSelect) {
       filterSelect.addEventListener('change', function () {
         var val = this.value;
-        var url = '/sessions{{ token_url }}';
+        var url = '/sessions';
         if (val) {
           url += (url.indexOf('?') !== -1 ? '&' : '?') + 'restaurant_id=' + encodeURIComponent(val);
         }

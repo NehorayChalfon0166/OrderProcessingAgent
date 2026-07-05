@@ -88,12 +88,7 @@ def _type_to_json_schema(py_type) -> dict:
     """Map a Python type annotation to a JSON Schema type dict."""
     origin = getattr(py_type, "__origin__", None)
 
-    # str | None / Optional[str]
-    if origin is None:
-        # Check for union types (Python 3.10+)
-        pass
-
-    # Handle Optional[T] (Union[T, None])
+    # Handle Optional[T] / T | None (Union types, Python 3.10+)
     args = getattr(py_type, "__args__", ())
     if type(None) in args:
         inner = [a for a in args if a is not type(None)][0]
@@ -154,11 +149,11 @@ def add_to_cart(
     resolved_size, size_issues = catalogue.resolve_size(product, size)
     issues.extend(size_issues)
 
-    # 4. Resolve toppings
+    # 3. Resolve toppings
     resolved_toppings, topping_issues = catalogue.resolve_toppings(product, toppings)
     issues.extend(topping_issues)
 
-    # 5. Create cart item
+    # 4. Create cart item
     cart_item = CartItem(
         product_id=product.id,
         name=product.name,
@@ -170,7 +165,7 @@ def add_to_cart(
         special_instructions=special_instructions,
     )
 
-    # 6. Price it
+    # 5. Price it
     cart_item = pricing.price_item(cart_item)
     session.cart.append(cart_item)
 
@@ -281,7 +276,15 @@ def set_customer_info(
         try:
             session.customer.order_type = OrderType(order_type.lower())
         except ValueError:
-            pass  # ignore invalid values
+            # Log and surface the invalid value so the LLM can correct it
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(
+                "set_customer_info: invalid order_type '%s', ignoring", order_type
+            )
+            missing.append(
+                f"order_type must be 'delivery' or 'pickup', got '{order_type}'"
+            )
 
     # What's still required?
     missing: list[str] = []

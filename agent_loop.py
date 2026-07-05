@@ -23,16 +23,13 @@ from tools import TOOLS_BY_STATE
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 5
-"""Safety cap — prevents infinite loops if the model never converges."""
-
-
 def process_turn(
     session: OrderSession,
     user_message: str,
     catalogue: Catalogue,
     pricing: PricingEngine,
     llm_client: LLMClient,
+    max_iterations: int = 5,
 ) -> str:
     """Process one user message through the agent loop.
 
@@ -57,7 +54,7 @@ def process_turn(
     logger.debug("Processing: %s", user_message[:200])
 
     # 2. Loop: LLM → tools → repeat until clean text or max iterations
-    for iteration in range(MAX_ITERATIONS):
+    for iteration in range(max_iterations):
         # Refresh tool availability each iteration (state may change)
         tool_funcs = TOOLS_BY_STATE.get(session.state, [])
         tool_defs = build_tool_definitions(tool_funcs) if tool_funcs else None
@@ -106,7 +103,7 @@ def process_turn(
     # 3. Fallback — max iterations exhausted (should be extremely rare)
     logger.warning(
         "Max iterations (%d) exhausted for session %s",
-        MAX_ITERATIONS, session.session_id,
+        max_iterations, session.session_id,
     )
     fallback = "I've processed your request. Is there anything else?"
     session.add_assistant_message(content=fallback)

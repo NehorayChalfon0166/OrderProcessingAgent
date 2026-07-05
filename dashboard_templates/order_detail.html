@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <a href="/orders{{ token_url }}" class="back-link">← Back to Orders</a>
+    <a href="/orders" class="back-link">← Back to Orders</a>
     <h1 class="page-title">Order #{{ order.order_id[:8] }}</h1>
   </div>
 </div>
@@ -77,7 +77,7 @@
         <span class="detail-label">Address</span>
         <span class="detail-value">
           {% if order.order_type == 'delivery' %}
-            {{ order.address | default('N/A', true) }}
+            {{ order.customer_address | default('N/A', true) }}
           {% else %}
             Pickup
           {% endif %}
