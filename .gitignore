@@ -6,3 +6,5 @@ orders/
 sessions/
 
 order_agent.db
+order_agent.db-shm
+order_agent.db-wal
