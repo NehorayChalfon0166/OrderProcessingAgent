@@ -332,7 +332,7 @@ def request_review(
     return RequestReviewResult(success=True, issues=[])
 
 
-@tool(description="Confirm the order and choose payment method: 'cash' or 'link'")
+@tool(description="Confirm the order. Payment is cash on delivery/pickup only.")
 def confirm_order(
     session: OrderSession,
     catalogue: Catalogue,
