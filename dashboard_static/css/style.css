@@ -1918,3 +1918,45 @@ textarea.form-input {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ============================================================
+   Pagination
+   ============================================================ */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  margin-top: 8px;
+  border-top: 1px solid #1e2230;
+}
+.pagination-info {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+.pagination-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* ============================================================
+   Search Input
+   ============================================================ */
+.filter-bar .form-input {
+  background: #16191e;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  color: #e5e7eb;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+.filter-bar .form-input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+.filter-bar .form-input::placeholder {
+  color: #4b5563;
+}

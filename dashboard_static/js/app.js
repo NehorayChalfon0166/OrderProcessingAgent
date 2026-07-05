@@ -14,6 +14,7 @@
     initMobileSidebar();
     initStaggerAnimations();
     initFilterSelects();
+    initSearchInput();
     initTableRowLinks();
     initCopyButtons();
     initMenuEditForms();
@@ -140,7 +141,40 @@
   }
 
   /* ----------------------------------------------------------
-     5. Table Row Click Navigation
+     5. Search Input — debounced auto-submit
+     ---------------------------------------------------------- */
+  function initSearchInput() {
+    const searchInput = document.getElementById('filter-search');
+    if (!searchInput) return;
+
+    let timer = null;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const url = new URL(window.location.href);
+        const params = new URLSearchParams();
+        // Preserve existing filters
+        const form = searchInput.closest('.filter-bar');
+        if (form) {
+          form.querySelectorAll('.form-select').forEach((s) => {
+            if (s.name && s.value) params.set(s.name, s.value);
+          });
+        }
+        // Set search (or remove if empty)
+        const q = searchInput.value.trim();
+        if (q) params.set('search', q);
+        params.set('offset', '0');  // reset to first page on new search
+        // Preserve token if present
+        if (url.searchParams.has('token')) {
+          params.set('token', url.searchParams.get('token'));
+        }
+        window.location.href = `${url.pathname}?${params.toString()}`;
+      }, 400);  // 400ms debounce
+    });
+  }
+
+  /* ----------------------------------------------------------
+     6. Table Row Click Navigation
      ---------------------------------------------------------- */
   function initTableRowLinks() {
     const rows = document.querySelectorAll('tr[data-href]');

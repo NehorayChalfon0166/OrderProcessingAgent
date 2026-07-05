@@ -119,23 +119,46 @@ async def overview(request: Request):
 
 
 @app.get("/orders", response_class=HTMLResponse)
-async def list_orders(request: Request, restaurant_id: str = "", limit: int = Query(default=50, le=500), order_type: str = "", payment_method: str = ""):
+async def list_orders(
+    request: Request,
+    restaurant_id: str = "",
+    limit: int = Query(default=50, le=500),
+    offset: int = Query(default=0, ge=0),
+    order_type: str = "",
+    payment_method: str = "",
+    search: str = "",
+):
     _check_token(request)
     db, registry = _require_init()
     all_orders = []
+    fetch_limit = max(limit + offset + 200, 500)  # fetch extra for client-side filter headroom
     if restaurant_id:
-        all_orders = db.get_orders(restaurant_id, limit=limit)
+        all_orders = db.get_orders(restaurant_id, limit=fetch_limit)
     else:
         for r in registry.list_restaurants():
-            all_orders.extend(db.get_orders(r.id, limit=limit))
+            all_orders.extend(db.get_orders(r.id, limit=fetch_limit))
     all_orders.sort(key=lambda o: o.get("created_at", ""), reverse=True)
-    all_orders = all_orders[:limit]
     if order_type:
         all_orders = [o for o in all_orders if o.get("order_type") == order_type]
     if payment_method:
         all_orders = [o for o in all_orders if o.get("payment_method") == payment_method]
+    if search:
+        q = search.lower()
+        all_orders = [
+            o for o in all_orders
+            if q in (o.get("customer_name") or "").lower()
+            or q in (o.get("customer_phone") or "").lower()
+            or q in (o.get("order_id") or "").lower()
+        ]
+    total = len(all_orders)
+    has_more = (offset + limit) < total
+    page = all_orders[offset:offset + limit]
     restaurants = registry.list_restaurants()
-    return _render(request, "orders.html", orders=all_orders, restaurants=restaurants, filters={"restaurant_id": restaurant_id, "order_type": order_type, "payment_method": payment_method, "limit": limit})
+    return _render(request, "orders.html", orders=page, restaurants=restaurants, filters={
+        "restaurant_id": restaurant_id, "order_type": order_type,
+        "payment_method": payment_method, "limit": limit, "offset": offset,
+        "search": search,
+    }, total=total, has_more=has_more)
 
 
 @app.get("/orders/{order_id}", response_class=HTMLResponse)
