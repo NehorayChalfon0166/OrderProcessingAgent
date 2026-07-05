@@ -20,6 +20,7 @@
     initMenuEditForms();
     initRestaurantAddForm();
     initConfirmButtons();
+    initLiveEvents();
   });
 
   /* ----------------------------------------------------------
@@ -385,6 +386,34 @@
     toast.addEventListener('animationend', () => {
       toast.remove();
     });
+  }
+
+  /* ----------------------------------------------------------
+     Live Events (SSE) — real-time new-order notifications
+     ---------------------------------------------------------- */
+  function initLiveEvents() {
+    try {
+      const url = new URL('/events', window.location.href);
+      // Pass token via query param for EventSource (cookies don't work)
+      const token = new URLSearchParams(window.location.search).get('token');
+      if (token) url.searchParams.set('token', token);
+
+      const es = new EventSource(url.toString());
+      es.addEventListener('new_order', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          window.showToast(
+            `New order from ${data.customer} at ${data.restaurant} — $${data.total.toFixed(2)}`,
+            'info'
+          );
+        } catch (_) { /* ignore malformed events */ }
+      });
+      es.onerror = () => {
+        // EventSource auto-reconnects; no action needed
+      };
+    } catch (_) {
+      // SSE not supported or connection failed — degrade silently
+    }
   }
 
   function escapeHtml(str) {

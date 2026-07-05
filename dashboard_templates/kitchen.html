@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f1117">
+  <title>Kitchen Display — {{ restaurant_name }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: #0a0c10;
+      color: #e5e7eb;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    .kitchen-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 24px 32px; background: #111318;
+      border-bottom: 2px solid #1e2230; position: sticky; top: 0; z-index: 10;
+    }
+    .kitchen-header h1 { font-size: 2rem; font-weight: 800; }
+    .kitchen-header .time { font-size: 1.5rem; color: #6b7280; font-weight: 600; }
+    .kitchen-header .order-count {
+      background: #6366f1; color: #fff; padding: 6px 18px;
+      border-radius: 99px; font-size: 1.2rem; font-weight: 700;
+    }
+    .orders-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 20px; padding: 24px 32px;
+    }
+    .order-card {
+      background: #111318; border: 2px solid #1e2230; border-radius: 16px;
+      padding: 24px; transition: border-color 0.3s;
+    }
+    .order-card.fresh { border-color: #22c55e; }
+    .order-card.warning { border-color: #f59e0b; }
+    .order-card.urgent { border-color: #ef4444; }
+    .order-card-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      margin-bottom: 16px;
+    }
+    .order-card-header .order-id { font-size: 1.4rem; font-weight: 800; }
+    .order-card-header .elapsed { font-size: 0.9rem; font-weight: 600; padding: 4px 12px; border-radius: 99px; }
+    .fresh .elapsed { background: #22c55e20; color: #22c55e; }
+    .warning .elapsed { background: #f59e0b20; color: #f59e0b; }
+    .urgent .elapsed { background: #ef444420; color: #ef4444; }
+    .order-items { list-style: none; margin-bottom: 12px; }
+    .order-items li {
+      font-size: 1.15rem; padding: 6px 0; border-bottom: 1px solid #1a1d24;
+      display: flex; justify-content: space-between;
+    }
+    .order-items .qty { font-weight: 700; color: #6366f1; margin-right: 8px; }
+    .order-items .size { color: #6b7280; font-size: 0.9rem; }
+    .order-items .toppings { color: #6b7280; font-size: 0.85rem; display: block; }
+    .order-meta { font-size: 0.9rem; color: #6b7280; display: flex; gap: 16px; }
+    .order-type-badge {
+      padding: 4px 10px; border-radius: 6px; font-weight: 600; font-size: 0.85rem;
+    }
+    .badge-delivery { background: #3b82f620; color: #3b82f6; }
+    .badge-pickup { background: #8b5cf620; color: #8b5cf6; }
+    .empty-kitchen {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 60vh; color: #374151;
+    }
+    .empty-kitchen .icon { font-size: 5rem; margin-bottom: 16px; }
+    .empty-kitchen h2 { font-size: 2rem; font-weight: 700; }
+  </style>
+  <script>
+    // Auto-refresh every 15 seconds
+    setTimeout(function(){ window.location.reload(); }, 15000);
+    // Live clock
+    setInterval(function(){
+      var el = document.getElementById('live-time');
+      if (el) el.textContent = new Date().toLocaleTimeString();
+    }, 1000);
+  </script>
+</head>
+<body>
+  <div class="kitchen-header">
+    <div>
+      <h1>{{ restaurant_name or 'Kitchen Display' }}</h1>
+      <span style="color:#6b7280;font-size:0.9rem;">{{ orders|length }} pending</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <span class="time" id="live-time">{{ now[:19] }}</span>
+      <span class="order-count">{{ orders|length }}</span>
+    </div>
+  </div>
+
+  {% if orders %}
+  <div class="orders-grid">
+    {% for order in orders %}
+    {% set created = order.created_at or '' %}
+    {% set elapsed_sec = (now|string)[:19]|string|length %}
+    <div class="order-card {{ 'fresh' if loop.index <= 2 else 'warning' if loop.index <= 5 else 'urgent' }}">
+      <div class="order-card-header">
+        <div>
+          <div class="order-id">#{{ order.order_id[:10] }}…</div>
+          <div style="color:#6b7280;font-size:0.85rem;">{{ order.customer_name or 'Walk-in' }}</div>
+        </div>
+        <span class="elapsed">{{ created[11:16] if created else '—' }}</span>
+      </div>
+      <ul class="order-items">
+        {% for item in order.items %}
+        <li>
+          <span><span class="qty">{{ item.quantity }}x</span> {{ item.name }} <span class="size">{% if item.size %}{{ item.size }}{% endif %}</span></span>
+        </li>
+        {% if item.toppings %}
+        <span class="toppings">+ {{ item.toppings|map(attribute='name')|join(', ') }}</span>
+        {% endif %}
+        {% if item.special_instructions %}
+        <span class="toppings" style="color:#f59e0b;">⚠ {{ item.special_instructions }}</span>
+        {% endif %}
+        {% endfor %}
+      </ul>
+      <div class="order-meta">
+        <span class="order-type-badge {{ 'badge-delivery' if order.order_type == 'delivery' else 'badge-pickup' }}">{{ order.order_type|capitalize if order.order_type else 'Pickup' }}</span>
+        {% if order.order_type == 'delivery' and order.customer_address %}
+        <span>📍 {{ order.customer_address }}</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-kitchen">
+    <div class="icon">🍽️</div>
+    <h2>No pending orders</h2>
+    <p style="color:#4b5563;margin-top:8px;">New orders will appear here automatically</p>
+  </div>
+  {% endif %}
+</body>
+</html>

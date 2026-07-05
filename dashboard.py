@@ -10,11 +10,13 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -293,6 +295,103 @@ async def add_restaurant(request: Request):
         return HTMLResponse(f"<p style='color:green'>✅ {msg}</p>")
     except (ValueError, FileNotFoundError) as e:
         return HTMLResponse(f"<p style='color:red'>❌ {e}</p>", status_code=400)
+
+
+@app.get("/events")
+async def event_stream(request: Request):
+    """SSE endpoint — pushes new-order notifications to connected dashboard clients."""
+    _check_token(request)
+    db, registry = _require_init()
+
+    async def generate():
+        last_counts: dict[str, int] = {}
+        try:
+            while True:
+                # Check each restaurant for new orders
+                for r in registry.list_restaurants():
+                    orders = db.get_orders(r.id, limit=50)
+                    current = len(orders)
+                    prev = last_counts.get(r.id, current)
+                    if current > prev:
+                        newest = orders[0]
+                        yield (
+                            f"event: new_order\ndata: {json.dumps({'restaurant': r.name, 'order_id': newest.get('order_id', '?')[:12], 'customer': newest.get('customer_name', 'Unknown'), 'total': newest.get('total', 0)})}\n\n"
+                        )
+                    last_counts[r.id] = current
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics(request: Request, restaurant_id: str = ""):
+    _check_token(request)
+    db, registry = _require_init()
+    restaurants = registry.list_restaurants()
+    ids = [restaurant_id] if restaurant_id else [r.id for r in restaurants]
+
+    from collections import defaultdict
+
+    all_orders = []
+    for rid in ids:
+        all_orders.extend(db.get_orders(rid, limit=1000))
+
+    revenue_by_day: dict[str, float] = defaultdict(float)
+    item_counts: dict[str, int] = defaultdict(int)
+    type_counts: dict[str, int] = defaultdict(int)
+    total_revenue = 0.0
+
+    for o in all_orders:
+        day = (o.get("created_at") or "")[:10]
+        if day:
+            revenue_by_day[day] += float(o.get("total", 0))
+        total_revenue += float(o.get("total", 0))
+        for item in o.get("items", []):
+            item_counts[item.get("name", "?")] += item.get("quantity", 1)
+        type_counts[o.get("order_type", "pickup")] += 1
+
+    days = sorted(revenue_by_day.items())[-30:]
+    popular = sorted(item_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    avg_order = total_revenue / len(all_orders) if all_orders else 0
+
+    return _render(request, "analytics.html",
+        restaurants=restaurants,
+        filters={"restaurant_id": restaurant_id},
+        days=days,
+        popular=popular,
+        type_counts=dict(type_counts),
+        total_orders=len(all_orders),
+        total_revenue=total_revenue,
+        avg_order=avg_order,
+    )
+
+
+@app.get("/kitchen", response_class=HTMLResponse)
+async def kitchen_display(request: Request, restaurant_id: str = ""):
+    _check_token(request)
+    db, registry = _require_init()
+    if not restaurant_id and registry.list_restaurants():
+        restaurant_id = registry.list_restaurants()[0].id
+    orders = db.get_unprinted_orders(restaurant_id) if restaurant_id else []
+    restaurant_name = ""
+    if restaurant_id:
+        ctx = registry.get_by_id(restaurant_id)
+        if ctx:
+            restaurant_name = ctx.config.name
+    from datetime import datetime as _dt
+    return _render(request, "kitchen.html",
+        orders=orders,
+        restaurant_id=restaurant_id,
+        restaurant_name=restaurant_name,
+        restaurants=registry.list_restaurants(),
+        now=_dt.now().isoformat(),
+    )
 
 
 @app.get("/health")

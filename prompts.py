@@ -4,7 +4,7 @@ Single unified prompt for the loop-based agent. Tools are always available
 — the LLM decides in each iteration whether to call tools or respond to the
 customer. It naturally converges when it has everything it needs.
 
-The LLM discovers the menu through tool results — no menu dump in the prompt.
+Supports pluggable domains via domain.py. The default domain is 'order'.
 """
 
 from __future__ import annotations
@@ -17,12 +17,25 @@ def build_system_prompt(
     session: OrderSession,
     restaurant_name: str,
     hints: str,
+    domain_name: str = "order",
 ) -> str:
-    """Unified system prompt — LLM always has tools available.
+    """Build a system prompt. Uses domain template if available."""
+    # Try domain-specific template first
+    try:
+        from domain import get_domain
+        domain = get_domain(domain_name)
+        if domain.system_prompt_template:
+            return domain.system_prompt_template.format(
+                restaurant_name=restaurant_name,
+                state=session.state.value,
+                cart_summary=_format_cart(session),
+                hints=hints,
+                customer_info=_format_customer(session.customer),
+            )
+    except Exception:
+        pass  # fall back to default
 
-    The loop lets the model call tools until it's ready to respond.
-    No separate "you have tools" vs "you don't have tools" modes.
-    """
+    # Default order-domain prompt
     return (
         f"You are a friendly, brief order-taking assistant for {restaurant_name}.\n"
         f"Current state: {session.state.value}\n"

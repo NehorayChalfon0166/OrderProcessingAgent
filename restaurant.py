@@ -36,6 +36,8 @@ class RestaurantConfig:
             this restaurant (e.g. "+14155238886").
         owner_phone: The restaurant owner's personal WhatsApp number.
             New-order notifications are sent here (not to twilio_phone).
+        domain: Bot domain name (default 'order'). Determines which tools
+            and system prompt the bot uses. See domain.py.
     """
 
     id: str
@@ -43,6 +45,7 @@ class RestaurantConfig:
     menu_path: str
     twilio_phone: str
     owner_phone: str
+    domain: str = "order"
 
 
 @dataclass
@@ -230,6 +233,7 @@ class RestaurantRegistry:
             menu_path=menu_path,
             twilio_phone=twilio_phone,
             owner_phone=owner_phone,
+            domain=data.get("domain", "order"),
         )
 
 

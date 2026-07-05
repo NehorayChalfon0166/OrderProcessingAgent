@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./order_agent.db:/app/order_agent.db
+      - ./restaurants.json:/app/restaurants.json
+      - ./menus:/app/menus
+      - ./orders:/app/orders
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
+      - API_TOKEN=${API_TOKEN:-admin123}
+      - DB_PATH=/app/order_agent.db
+      - RESTAURANTS_PATH=/app/restaurants.json
+      - ORDERS_DIR=/app/orders
+      - DEBUG=${DEBUG:-false}
+    restart: unless-stopped
+    command: ["python", "main.py", "dashboard", "--port", "8081"]
+
+  # Uncomment to also run the Twilio webhook server:
+  # server:
+  #   build: .
+  #   ports:
+  #     - "8080:8080"
+  #   volumes:
+  #     - ./order_agent.db:/app/order_agent.db
+  #     - ./restaurants.json:/app/restaurants.json
+  #     - ./menus:/app/menus
+  #     - ./orders:/app/orders
+  #   environment:
+  #     - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+  #     - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+  #     - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+  #     - TWILIO_WHATSAPP_NUMBER=${TWILIO_WHATSAPP_NUMBER}
+  #     - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+  #     - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+  #     - API_TOKEN=${API_TOKEN}
+  #   restart: unless-stopped
+  #   command: ["python", "main.py", "server", "--port", "8080"]
