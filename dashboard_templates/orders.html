@@ -21,7 +21,7 @@
 
   <div class="filter-group">
     <label class="filter-label" for="filter-restaurant">Restaurant</label>
-    <select id="filter-restaurant" class="filter-select" data-filter="restaurant_id">
+    <select id="filter-restaurant" class="filter-select" name="restaurant_id" data-filter="restaurant_id">
       <option value="">All Restaurants</option>
       {% for r in restaurants %}
         <option value="{{ r.id }}" {% if filters.restaurant_id == r.id %}selected{% endif %}>{{ r.name }}</option>
@@ -31,7 +31,7 @@
 
   <div class="filter-group">
     <label class="filter-label" for="filter-order-type">Order Type</label>
-    <select id="filter-order-type" class="filter-select" data-filter="order_type">
+    <select id="filter-order-type" class="filter-select" name="order_type" data-filter="order_type">
       <option value="">All</option>
       <option value="delivery" {% if filters.order_type == 'delivery' %}selected{% endif %}>Delivery</option>
       <option value="pickup" {% if filters.order_type == 'pickup' %}selected{% endif %}>Pickup</option>
@@ -40,7 +40,7 @@
 
   <div class="filter-group">
     <label class="filter-label" for="filter-payment">Payment Method</label>
-    <select id="filter-payment" class="filter-select" data-filter="payment_method">
+    <select id="filter-payment" class="filter-select" name="payment_method" data-filter="payment_method">
       <option value="">All</option>
       <option value="cash" {% if filters.payment_method == 'cash' %}selected{% endif %}>Cash</option>
       <option value="link" {% if filters.payment_method == 'link' %}selected{% endif %}>Link</option>
@@ -49,7 +49,7 @@
 
   <div class="filter-group">
     <label class="filter-label" for="filter-limit">Per page</label>
-    <select id="filter-limit" class="filter-select" data-filter="limit">
+    <select id="filter-limit" class="filter-select" name="limit" data-filter="limit">
       <option value="25" {% if filters.limit == 25 %}selected{% endif %}>25</option>
       <option value="50" {% if filters.limit == 50 %}selected{% endif %}>50</option>
       <option value="100" {% if filters.limit == 100 %}selected{% endif %}>100</option>

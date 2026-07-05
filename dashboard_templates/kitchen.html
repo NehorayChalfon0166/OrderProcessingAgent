@@ -81,9 +81,12 @@
 </head>
 <body>
   <div class="kitchen-header">
-    <div>
-      <h1>{{ restaurant_name or 'Kitchen Display' }}</h1>
-      <span style="color:#6b7280;font-size:0.9rem;">{{ orders|length }} pending</span>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <a href="/" style="color:#6b7280;text-decoration:none;font-size:1rem;">← Dashboard</a>
+      <div>
+        <h1 style="margin:0;">{{ restaurant_name or 'Kitchen Display' }}</h1>
+        <span style="color:#6b7280;font-size:0.9rem;">{{ orders|length }} pending</span>
+      </div>
     </div>
     <div style="display:flex;align-items:center;gap:16px;">
       <span class="time" id="live-time">{{ now[:19] }}</span>

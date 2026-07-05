@@ -109,7 +109,7 @@
           {% for item in order["items"] %}
           <tr>
             <td>{{ item.name }}</td>
-            <td>{{ item.size | default('—', true) }}</td>
+            <td>{{ item.size if item.size else '' }}</td>
             <td>{{ item.quantity }}</td>
             <td>
               {% if item.toppings %}

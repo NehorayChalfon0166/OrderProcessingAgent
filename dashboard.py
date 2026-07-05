@@ -116,7 +116,7 @@ async def overview(request: Request):
     stats = []
 
     for r in registry.list_restaurants():
-        orders = db.get_orders(r.id, limit=500)
+        orders = db.get_orders(r.id, limit=200)
         unprinted = db.get_unprinted_orders(r.id)
         active = len(db.list_active_sessions(r.id, limit=200))
 
@@ -252,6 +252,13 @@ async def session_detail(request: Request, session_id: str):
     if session_data is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return _render(request, "session_detail.html", session=session_data, restaurant_name=restaurant_name)
+
+
+@app.get("/menus", response_class=HTMLResponse)
+async def list_menus(request: Request):
+    _check_token(request)
+    _db, registry = _require_init()
+    return _render(request, "menus.html", restaurants=registry.list_restaurants())
 
 
 @app.get("/menu/{restaurant_id}", response_class=HTMLResponse)
