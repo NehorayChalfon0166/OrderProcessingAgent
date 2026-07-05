@@ -57,6 +57,28 @@ _STALE_HOURS: float = 2.0
 _LOCK_TTL_SECONDS: float = 3600.0  # 1 hour
 _MAX_LOCKS_BEFORE_SWEEP: int = 1000
 
+# Rate limiting — per-phone throttle
+_RATE_LIMIT_WINDOW: float = 60.0     # 1 minute window
+_RATE_LIMIT_MAX: int = 20            # max messages per window per phone
+_rate_window: dict[str, list[float]] = {}  # phone → [timestamps]
+
+# Agent loop timeout
+_AGENT_TIMEOUT_SECONDS: float = 45.0
+
+
+def _check_rate_limit(phone: str) -> bool:
+    """Return True if the phone is within the rate limit. False if throttled."""
+    now = _time_module.monotonic()
+    timestamps = _rate_window.get(phone, [])
+    # Purge old entries
+    timestamps = [t for t in timestamps if now - t < _RATE_LIMIT_WINDOW]
+    if len(timestamps) >= _RATE_LIMIT_MAX:
+        _rate_window[phone] = timestamps
+        return False
+    timestamps.append(now)
+    _rate_window[phone] = timestamps
+    return True
+
 
 def _get_lock(identity: str) -> asyncio.Lock:
     """Return (and lazily create) a per-identity asyncio.Lock."""
@@ -128,50 +150,16 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("Server shutting down")
 
 
-def _save_order_file(session, restaurant_ctx: RestaurantContext) -> None:
-    """Persist a completed order to the restaurant-scoped orders directory."""
-    ot = session.customer.order_type or OrderType.PICKUP
-    subtotal, delivery_fee, total = restaurant_ctx.pricing.compute_totals(
-        session.cart, ot
-    )
-
-    # Generate a unique order ID — not the session_id (phone number),
-    # which would collide on repeat orders from the same customer.
-    ts = datetime.now(timezone.utc)
-    order_id = (
-        f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_"
-        f"{str(uuid.uuid4())[:6]}"
-    )
-
-    payload = {
-        "order_id": order_id,
-        "session_id": session.session_id,
-        "restaurant_id": session.restaurant_id,
-        "restaurant": restaurant_ctx.config.name,
-        "items": [item.model_dump() for item in session.cart],
-        "customer": session.customer.model_dump(),
-        "subtotal": subtotal,
-        "delivery_fee": delivery_fee,
-        "total": total,
-        "order_type": ot.value,
-        "payment_method": session.payment_method or "cash",
-        "timestamp": ts.isoformat(),
-    }
-
-    order_dir = Path(_orders_dir) / session.restaurant_id
-    order_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{order_id}.json"
-    filepath = order_dir / filename
-    filepath.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-
-    # Also save to database if available
+def _save_order_file(session, restaurant_ctx: RestaurantContext) -> str:
+    """Persist a completed order. Delegates to Database.persist_completed_order."""
     if _db is not None:
-        _db.save_order(payload)
-
-    logger.info("Order saved: %s (id: %s)", filepath, order_id)
-    return order_id
+        return _db.persist_completed_order(
+            session, restaurant_ctx.pricing,
+            restaurant_ctx.config.name, _orders_dir,
+        )
+    # Fallback — should not happen in normal operation
+    logger.error("Database not initialised — cannot save order")
+    return ""
 
 
 def _notify_restaurant(session, restaurant_ctx: RestaurantContext, order_id: str = "") -> None:
@@ -240,8 +228,29 @@ async def _add_request_id(request: Request, call_next):
 
 @app.get("/health")
 async def health() -> dict:
-    """Health check endpoint for monitoring and load balancers."""
-    return {"status": "ok"}
+    """Health check — verifies DB connectivity and server state."""
+    checks: dict[str, str] = {}
+    healthy = True
+    # DB check
+    if _db is not None:
+        try:
+            _db._db.execute_sql("SELECT 1")
+            checks["database"] = "ok"
+        except Exception as e:
+            checks["database"] = f"error: {e}"
+            healthy = False
+    else:
+        checks["database"] = "not_initialised"
+        healthy = False
+    # LLM check (lightweight — just verify client exists)
+    checks["llm"] = "ok" if _llm is not None else "not_initialised"
+    if _llm is None:
+        healthy = False
+    # Registry check
+    checks["restaurants"] = str(len(_registry.list_restaurants())) if _registry else "0"
+    status_code = 200 if healthy else 503
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content={"status": "ok" if healthy else "degraded", "checks": checks}, status_code=status_code)
 
 
 # ── WhatsApp Webhook ───────────────────────────────────────────────────────────
@@ -285,6 +294,11 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
     wa_id, text = extracted
     logger.info("WhatsApp from %s: %s", wa_id[:6], text[:100])
 
+    # ── Rate limit check ────────────────────────────────────────────────
+    if not _check_rate_limit(wa_id):
+        logger.warning("Rate limit hit for %s", wa_id[:6])
+        return PlainTextResponse(_EMPTY_TWIML, media_type="application/xml")
+
     # ── Route to restaurant by To number ──────────────────────────────────
     to_raw = flat_params.get("To", "")           # e.g. "whatsapp:+14155238886"
     to_clean = to_raw.removeprefix("whatsapp:")   # "+14155238886"
@@ -308,10 +322,13 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                     f"or start fresh before proceeding.]\n\n{text}"
                 )
 
-            response = await asyncio.to_thread(
-                process_turn,
-                session, text,
-                restaurant_ctx.catalogue, restaurant_ctx.pricing, _llm,
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    process_turn,
+                    session, text,
+                    restaurant_ctx.catalogue, restaurant_ctx.pricing, _llm,
+                ),
+                timeout=_AGENT_TIMEOUT_SECONDS,
             )
             session.save()
 

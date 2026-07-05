@@ -99,8 +99,14 @@ def _register_builtins() -> None:
 
 
 def get_domain(name: str = "order") -> DomainConfig:
-    """Return a domain by name. Falls back to 'order' if not found."""
-    return DOMAINS.get(name, DOMAINS.get("order", _make_order_domain()))
+    """Return a domain by name.
+
+    Raises KeyError if the domain is not registered. The 'order' domain
+    is always available as a built-in default.
+    """
+    if name not in DOMAINS and name == "order":
+        _register_builtins()
+    return DOMAINS[name]
 
 
 _register_builtins()

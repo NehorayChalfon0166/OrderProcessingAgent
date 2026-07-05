@@ -123,37 +123,28 @@ def save_order(
     restaurant_name: str,
     orders_dir: str,
 ) -> str:
-    """Build and save the final order to a JSON file."""
+    """Build and save the final order. Delegates to Database.persist_completed_order."""
+    if session._db is not None:
+        return session._db.persist_completed_order(session, pricing, restaurant_name, orders_dir)
+    # Fallback for sessions without a DB handle (shouldn't happen in normal flow)
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz
     ot = session.customer.order_type or OrderType.PICKUP
     subtotal, delivery_fee, total = pricing.compute_totals(session.cart, ot)
-
-    # Generate a unique order ID — not the session_id (phone number),
-    # which would collide on repeat orders from the same customer.
-    ts = datetime.now(timezone.utc)
-    order_id = (
-        f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_"
-        f"{str(uuid.uuid4())[:6]}"
-    )
-
+    ts = _dt.now(_tz.utc)
+    order_id = f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_{str(_uuid.uuid4())[:6]}"
     payload = {
-        "order_id": order_id,
-        "session_id": session.session_id,
-        "restaurant_id": session.restaurant_id,
-        "restaurant": restaurant_name,
+        "order_id": order_id, "session_id": session.session_id,
+        "restaurant_id": session.restaurant_id, "restaurant": restaurant_name,
         "items": [item.model_dump() for item in session.cart],
         "customer": session.customer.model_dump(),
-        "subtotal": subtotal,
-        "delivery_fee": delivery_fee,
-        "total": total,
-        "order_type": ot.value,
-        "payment_method": session.payment_method or "cash",
+        "subtotal": subtotal, "delivery_fee": delivery_fee, "total": total,
+        "order_type": ot.value, "payment_method": session.payment_method or "cash",
         "timestamp": ts.isoformat(),
     }
-
     order_dir = Path(orders_dir) / session.restaurant_id
     order_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{order_id}.json"
-    filepath = order_dir / filename
+    filepath = order_dir / f"{order_id}.json"
     filepath.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return str(filepath)
 

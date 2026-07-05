@@ -201,8 +201,67 @@ class Database:
     # Order CRUD
     # ------------------------------------------------------------------
 
+    def persist_completed_order(
+        self,
+        session,
+        pricing,
+        restaurant_name: str,
+        orders_dir: str = "orders",
+    ) -> str:
+        """Save a completed order to JSON file and database.
+
+        Builds the payload from session + pricing, generates a unique
+        order ID, writes to both JSON file and the orders table.
+
+        Returns the generated order_id.
+        """
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+
+        ot = session.customer.order_type
+        if hasattr(ot, 'value'):
+            ot = ot.value
+        ot = ot or "pickup"
+        subtotal, delivery_fee, total = pricing.compute_totals(session.cart, session.customer.order_type)
+
+        ts = _dt.now(_tz.utc)
+        order_id = (
+            f"{session.restaurant_id}_{ts.strftime('%Y%m%d%H%M%S')}_"
+            f"{str(_uuid.uuid4())[:6]}"
+        )
+
+        payload = {
+            "order_id": order_id,
+            "session_id": session.session_id,
+            "restaurant_id": session.restaurant_id,
+            "restaurant": restaurant_name,
+            "items": [item.model_dump() for item in session.cart],
+            "customer": session.customer.model_dump(),
+            "subtotal": subtotal,
+            "delivery_fee": delivery_fee,
+            "total": total,
+            "order_type": ot,
+            "payment_method": session.payment_method or "cash",
+            "timestamp": ts.isoformat(),
+        }
+
+        # Save to JSON file
+        order_dir = Path(orders_dir) / session.restaurant_id
+        order_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{order_id}.json"
+        filepath = order_dir / filename
+        filepath.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+        # Save to database
+        self.save_order(payload)
+
+        logger.info("Order saved: %s (id: %s)", filepath, order_id)
+        return order_id
+
     def save_order(self, order_data: dict) -> None:
-        """Insert a completed order."""
+        """Insert a completed order (low-level — use persist_completed_order)."""
         customer = order_data.get("customer", {})
         OrderRow.replace({
             "id": order_data.get("order_id", ""),
@@ -247,6 +306,23 @@ class Database:
         )
         return [_order_row_to_dict(r) for r in rows]
 
+    def cleanup_old_sessions(self, max_age_days: int = 30) -> int:
+        """Delete terminal sessions older than *max_age_days*. Returns count."""
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        deleted = (
+            SessionRow
+            .delete()
+            .where(
+                SessionRow.state.in_(["completed", "cancelled"])
+                & (SessionRow.updated_at < cutoff)
+            )
+            .execute()
+        )
+        if deleted:
+            logger.info("Cleaned up %d old sessions (older than %d days)", deleted, max_age_days)
+        return deleted
+
     def mark_printed(self, order_id: str) -> None:
         """Set printed=1 for an order. Idempotent."""
         OrderRow.update(printed=1).where(
@@ -265,8 +341,11 @@ class Database:
             self._db.execute_sql(
                 "ALTER TABLE orders ADD COLUMN customer_address TEXT"
             )
-        except Exception:
-            pass  # column already exists
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                logger.warning(
+                    "Unexpected error adding customer_address column: %s", e
+                )
 
     def _migrate_if_needed(self) -> None:
         """One-time migration from legacy JSON files.

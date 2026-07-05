@@ -23,17 +23,25 @@ def build_system_prompt(
     # Try domain-specific template first
     try:
         from domain import get_domain
-        domain = get_domain(domain_name)
-        if domain.system_prompt_template:
-            return domain.system_prompt_template.format(
-                restaurant_name=restaurant_name,
-                state=session.state.value,
-                cart_summary=_format_cart(session),
-                hints=hints,
-                customer_info=_format_customer(session.customer),
+    except ImportError:
+        get_domain = None  # type: ignore[assignment]
+
+    if get_domain is not None:
+        try:
+            domain = get_domain(domain_name)
+            if domain.system_prompt_template:
+                return domain.system_prompt_template.format(
+                    restaurant_name=restaurant_name,
+                    state=session.state.value,
+                    cart_summary=_format_cart(session),
+                    hints=hints,
+                    customer_info=_format_customer(session.customer),
+                )
+        except KeyError as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Domain template missing key: %s — using default prompt", e
             )
-    except Exception:
-        pass  # fall back to default
 
     # Default order-domain prompt
     return (

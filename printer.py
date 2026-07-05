@@ -1,4 +1,4 @@
-"""Thermal printer formatter — converts orders to kitchen tickets (bones).
+"""Thermal printer formatter — converts orders to kitchen tickets.
 
 Produces ESC/POS bytes for direct printing on 80mm thermal printers.
 Also supports a virtual "file" mode that outputs HTML styled as thermal
@@ -15,12 +15,25 @@ from datetime import datetime
 
 
 # ---------------------------------------------------------------------------
+# ESC/POS control codes
+# ---------------------------------------------------------------------------
+
+ESC = b"\x1b"
+INIT = ESC + b"@"          # Initialize printer
+ALIGN_LEFT = ESC + b"a\x00"
+ALIGN_CENTER = ESC + b"a\x01"
+BOLD_ON = ESC + b"E\x01"
+BOLD_OFF = ESC + b"E\x00"
+FEED = ESC + b"d\x03"      # Feed 3 lines
+CUT = b"\x1d\x56\x00"      # Paper cut (partial)
+
+# ---------------------------------------------------------------------------
 # Ticket layout constants
 # ---------------------------------------------------------------------------
 
 LINE_WIDTH = 42  # characters per line on 80mm thermal paper at default font
-SEPARATOR = "─" * LINE_WIDTH  # ──────
-BOLD_SEPARATOR = "═" * LINE_WIDTH  # ══════
+SEPARATOR = "─" * LINE_WIDTH
+BOLD_SEPARATOR = "═" * LINE_WIDTH
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +56,7 @@ def format_order(
         mode: "escpos" for thermal printer bytes, "file" for HTML preview.
 
     Returns:
-        In "escpos" mode: ESC/POS bytes ready for the printer.
+        In "escpos" mode: ESC/POS bytes with init, bold header, cut, feed.
         In "file" mode: UTF-8 HTML bytes styled like thermal paper.
     """
     text = _format_ticket(order, restaurant_name)
@@ -51,9 +64,35 @@ def format_order(
     if mode == "file":
         return _wrap_html(text).encode("utf-8")
     else:
-        # ESC/POS mode — plain text sent to printer as-is.
-        # python-escpos formatting can be added here for bold/cut/etc.
-        return text.encode("utf-8")
+        return _wrap_escpos(text)
+
+
+def _wrap_escpos(text: str) -> bytes:
+    """Wrap ticket text with ESC/POS commands for a professional receipt."""
+    parts: list[bytes] = [INIT, ALIGN_CENTER, BOLD_ON]
+    # Find the header block (first BOLD_SEPARATOR to second BOLD_SEPARATOR)
+    lines = text.split("\n")
+    in_header = False
+    body_start = 0
+    for i, line in enumerate(lines):
+        if line == BOLD_SEPARATOR:
+            if not in_header:
+                in_header = True
+            else:
+                body_start = i + 1
+                break
+    # Add header lines centered and bold
+    for line in lines[:body_start]:
+        parts.append((line + "\n").encode("utf-8"))
+    parts.append(BOLD_OFF)
+    parts.append(ALIGN_LEFT)
+    # Add body
+    for line in lines[body_start:]:
+        parts.append((line + "\n").encode("utf-8"))
+    # Footer: cut and feed
+    parts.append(CUT)
+    parts.append(FEED)
+    return b"".join(parts)
 
 
 # ---------------------------------------------------------------------------

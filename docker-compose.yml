@@ -14,7 +14,7 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
-      - API_TOKEN=${API_TOKEN:-admin123}
+      - API_TOKEN=${API_TOKEN:?required}
       - DB_PATH=/app/order_agent.db
       - RESTAURANTS_PATH=/app/restaurants.json
       - ORDERS_DIR=/app/orders
