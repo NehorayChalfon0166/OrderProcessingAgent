@@ -527,13 +527,12 @@ def _run_manage_menu(args, config: AppConfig) -> None:
 def _run_server(args, config: AppConfig) -> None:
     """Validate Twilio config and start the FastAPI server."""
     try:
-        import server  # noqa: F401 — lives on twilio-integration branch
+        import server  # noqa: F401
     except ImportError:
         print(
-            "❌ Server mode requires the twilio-integration branch.\n"
-            "   The server.py module is not on master — it lives on the\n"
-            "   twilio-integration branch alongside twilio_client.py.\n"
-            "   Check out that branch and try again."
+            "❌ Server module (server.py) not found.\n"
+            "   The Twilio webhook server has not been set up yet.\n"
+            "   Ensure server.py exists in the project root."
         )
         sys.exit(1)
 
