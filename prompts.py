@@ -17,33 +17,8 @@ def build_system_prompt(
     session: OrderSession,
     restaurant_name: str,
     hints: str,
-    domain_name: str = "order",
 ) -> str:
-    """Build a system prompt. Uses domain template if available."""
-    # Try domain-specific template first
-    try:
-        from domain import get_domain
-    except ImportError:
-        get_domain = None  # type: ignore[assignment]
-
-    if get_domain is not None:
-        try:
-            domain = get_domain(domain_name)
-            if domain.system_prompt_template:
-                return domain.system_prompt_template.format(
-                    restaurant_name=restaurant_name,
-                    state=session.state.value,
-                    cart_summary=_format_cart(session),
-                    hints=hints,
-                    customer_info=_format_customer(session.customer),
-                )
-        except KeyError as e:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Domain template missing key: %s — using default prompt", e
-            )
-
-    # Default order-domain prompt
+    """Build the system prompt for the order-processing agent."""
     return (
         f"You are a friendly, brief order-taking assistant for {restaurant_name}.\n"
         f"Current state: {session.state.value}\n"

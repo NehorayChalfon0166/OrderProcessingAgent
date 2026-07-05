@@ -45,6 +45,7 @@ def process_turn(
         catalogue: Product catalogue.
         pricing: Pricing engine.
         llm_client: LLM API client.
+        max_iterations: Safety cap for tool-calling loop iterations.
 
     Returns:
         The assistant text response to display to the user.

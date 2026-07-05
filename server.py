@@ -368,6 +368,7 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                     process_turn,
                     session, text,
                     restaurant_ctx.catalogue, restaurant_ctx.pricing, _llm,
+                    _cfg.max_iterations if _cfg else 5,
                 ),
                 timeout=timeout,
             )
