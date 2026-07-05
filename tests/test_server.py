@@ -251,6 +251,70 @@ class TestSessionLocking:
 
         assert srv._locks["marios:972539534345"] is not srv._locks["luigis:972539534345"]
 
+    def test_lock_exclusive_per_identity(self, mock_deps):
+        """Each (restaurant, phone) gets its own lock; same identity shares one."""
+        import asyncio
+        import server as srv
+
+        lock_a = srv._get_lock("marios:972539534345")
+        lock_b = srv._get_lock("luigis:972539534345")
+        lock_a2 = srv._get_lock("marios:972539534345")
+
+        # Same identity returns the same lock object
+        assert lock_a is lock_a2
+        # Different identities return different locks
+        assert lock_a is not lock_b
+        # Both are proper asyncio.Lock instances
+        assert isinstance(lock_a, asyncio.Lock)
+        assert isinstance(lock_b, asyncio.Lock)
+
+    def test_lock_acquire_and_release(self):
+        """Lock can be acquired and released without deadlock."""
+        import asyncio
+        import server as srv
+
+        lock = srv._get_lock("test:972511111111")
+
+        async def _critical():
+            async with lock:
+                return "done"
+
+        result = asyncio.run(_critical())
+        assert result == "done"
+        assert not lock.locked()
+
+    def test_lock_released_on_exception(self, mock_deps):
+        """Lock is released even if process_turn raises."""
+        import server as srv
+        from session import OrderSession
+
+        ctx = _make_restaurant_ctx("marios")
+        mock_deps["registry"].get_by_twilio_phone.return_value = ctx
+        session = OrderSession()
+        mock_deps["router"].get_or_create.return_value = session
+
+        lock_key = "marios:972539534345"
+
+        with mock.patch("server.process_turn", side_effect=RuntimeError("boom")):
+            with mock.patch("server.asyncio.to_thread", side_effect=RuntimeError("boom")):
+                resp = None
+                with mock.patch.object(
+                    __import__("twilio_client").TwilioClient,
+                    "validate_webhook", return_value=True,
+                ):
+                    from fastapi.testclient import TestClient as TC
+                    client = TC(srv.app)
+                    resp = client.post(
+                        "/whatsapp/webhook",
+                        content=_form_data(),
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    )
+
+        # Lock should not be held after exception
+        lock = srv._locks.get(lock_key)
+        if lock is not None:
+            assert not lock.locked(), "Lock should be released after exception"
+
 
 # =============================================================================
 # Stale Session Detection

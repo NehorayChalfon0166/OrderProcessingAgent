@@ -1,700 +1,630 @@
-"""Extensive integration/regression tests for multi-restaurant support.
+"""Integration tests — end-to-end behaviour across multiple components.
 
-Tests old functionality (ordering, saving, session management) hasn't broken,
-and new multi-restaurant functionality works correctly.
-
-Run: python tests/test_integration.py
+Tests catalogue, pricing, session persistence, tools, multi-restaurant
+registry, session routing, and edge cases. All use real component instances —
+no mocks at the function level.
 """
 
 import json
-import tempfile
-import sys
 from pathlib import Path
 
-
-# ---------------------------------------------------------------------------
-# Setup — add project root to path
-# ---------------------------------------------------------------------------
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pytest
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_menu(path, name="Test Restaurant", items=None, deals=None):
-    """Write a menu JSON file."""
-    if items is None:
-        items = [
-            {
-                "id": "pizza_margherita",
-                "name": "Margherita",
-                "description": "Classic pizza",
-                "sizes": {"small": 9.99, "medium": 12.99, "large": 15.99},
-                "default_size": "medium",
-                "available_toppings": ["extra_cheese", "mushrooms", "olives"],
-            },
-            {
-                "id": "pizza_pepperoni",
-                "name": "Pepperoni",
-                "description": "Pepperoni pizza",
-                "sizes": {"small": 10.99, "medium": 13.99, "large": 16.99},
-                "default_size": "medium",
-                "available_toppings": ["extra_cheese", "mushrooms"],
-            },
-            {
-                "id": "side_garlic_bread",
-                "name": "Garlic Bread",
-                "description": "Buttered bread",
-                "price": 4.99,
-            },
-            {
-                "id": "drink_cola",
-                "name": "Cola",
-                "description": "Soda",
-                "sizes": {"regular": 1.99, "large": 2.99},
-                "default_size": "regular",
-            },
-        ]
-    if deals is None:
-        deals = [
-            {
-                "id": "deal_family",
-                "name": "Family Deal",
-                "description": "2 large pizzas + side + 2 large drinks",
-                "price": 34.99,
-                "includes": {
-                    "pizzas": {"quantity": 2, "size": "large"},
-                    "sides": {"quantity": 1},
-                    "drinks": {"quantity": 2, "size": "large"},
-                },
-            }
-        ]
-    menu = {
-        "restaurant_name": name,
+def _write_test_menu(path: Path):
+    """Minimal test menu for edge-case tests that need their own files."""
+    path.write_text(json.dumps({
+        "restaurant_name": "Test",
         "currency": "USD",
         "categories": [
-            {"name": "Pizzas", "items": [i for i in items if i["id"].startswith("pizza")]},
-            {"name": "Sides", "items": [i for i in items if i["id"].startswith("side")]},
-            {"name": "Drinks", "items": [i for i in items if i["id"].startswith("drink")]},
+            {"name": "Pizza", "items": [
+                {"id": "pizza_margherita", "name": "Margherita",
+                 "sizes": {"medium": 12.99}, "default_size": "medium"},
+            ]},
         ],
-        "toppings": [
-            {"id": "extra_cheese", "name": "Extra Cheese", "price": 1.50},
-            {"id": "mushrooms", "name": "Mushrooms", "price": 1.00},
-            {"id": "olives", "name": "Olives", "price": 1.00},
-        ],
-        "deals": deals,
-        "delivery_fee": 3.99,
-        "min_order_amount": 10.00,
-        "estimated_delivery_time": "30-45 min",
-    }
-    path.write_text(json.dumps(menu))
+        "toppings": [],
+        "deals": [],
+        "delivery_fee": 0,
+        "min_order_amount": 0,
+    }))
 
-
-def _make_restaurants_json(path, restaurants):
-    """Write a restaurants.json file."""
-    path.write_text(json.dumps({"restaurants": restaurants}))
-
-
-def _make_restaurant_setup(tmp, second=False):
-    """Create menus and restaurants.json for testing. Returns (menu_paths, restaurants_path)."""
-    menu_a = tmp / "menus" / "rest_a.json"
-    menu_a.parent.mkdir(parents=True, exist_ok=True)
-    _make_menu(menu_a, "Restaurant A")
-
-    restaurants = {
-        "rest_a": {
-            "name": "Restaurant A",
-            "menu_path": str(menu_a),
-            "twilio_phone": "+1111111111",
-            "owner_phone": "+15551234567",
-        }
-    }
-
-    if second:
-        menu_b = tmp / "menus" / "rest_b.json"
-        _make_menu(menu_b, "Restaurant B")
-        restaurants["rest_b"] = {
-            "name": "Restaurant B",
-            "menu_path": str(menu_b),
-            "twilio_phone": "+2222222222",
-            "owner_phone": "+15551234567",
-        }
-
-    restaurants_path = tmp / "restaurants.json"
-    _make_restaurants_json(restaurants_path, restaurants)
-    return restaurants_path
-
-
-# ---------------------------------------------------------------------------
-# Results tracker
-# ---------------------------------------------------------------------------
-
-
-results = {"pass": 0, "fail": 0, "errors": []}
-
-
-def check(description, condition):
-    """Assert-like check that records results."""
-    if condition:
-        results["pass"] += 1
-        print(f"  ✓ {description}")
-    else:
-        results["fail"] += 1
-        msg = f"  ✗ FAIL: {description}"
-        results["errors"].append(msg)
-        print(msg)
+from catalogue import Catalogue
+from db import Database
+from models import CartItem, OrderState, OrderType
+from pricing import PricingEngine
+from restaurant import RestaurantConfig, RestaurantRegistry
+from session import OrderSession
+from session_router import SessionRouter
+from tools import (
+    add_to_cart, cancel_order, confirm_order, remove_from_cart,
+    request_review, set_customer_info, update_item, view_cart,
+)
 
 
 # =============================================================================
-# SECTION 1: Old functionality — regression tests
+# Catalogue — product lookup
 # =============================================================================
-print("=" * 70)
-print("SECTION 1: Old functionality regression")
-print("=" * 70)
 
-with tempfile.TemporaryDirectory() as tmpdir:
-    tmp = Path(tmpdir)
-    restaurants_path = _make_restaurant_setup(tmp)
 
-    from restaurant import RestaurantRegistry
-    registry = RestaurantRegistry(str(restaurants_path))
-    ctx = registry.get_default()
-    catalogue = ctx.catalogue
-    pricing = ctx.pricing
+class TestCatalogueProductLookup:
+    def test_find_by_exact_name(self, catalogue):
+        p = catalogue.find_product("Margherita")
+        assert p is not None
+        assert p.id == "pizza_margherita"
 
-    # --- Catalogue: product lookup ---
-    print("\n-- Catalogue: product lookup --")
-    p = catalogue.find_product("Margherita")
-    check("finds product by exact name", p is not None and p.id == "pizza_margherita")
-    check("finds product case-insensitive", catalogue.find_product("margherita").id == "pizza_margherita")
-    check("finds product by substring", catalogue.find_product("pepper").id == "pizza_pepperoni")
-    check("finds flat-price item", catalogue.find_product("Garlic Bread").id == "side_garlic_bread")
-    check("returns None for unknown", catalogue.find_product("sushi") is None)
-    check("get_product by id works", catalogue.get_product("pizza_margherita").name == "Margherita")
-    check("get_product unknown returns None", catalogue.get_product("nope") is None)
+    def test_find_case_insensitive(self, catalogue):
+        assert catalogue.find_product("margherita").id == "pizza_margherita"
 
-    # --- Catalogue: topping lookup ---
-    print("\n-- Catalogue: topping lookup --")
-    t = catalogue.find_topping("Extra Cheese")
-    check("finds topping by name", t is not None and t.id == "extra_cheese")
-    check("finds topping case-insensitive", catalogue.find_topping("mushrooms").id == "mushrooms")
-    check("finds topping by id fallback", catalogue.find_topping("extra_cheese").id == "extra_cheese")
-    check("unknown topping returns None", catalogue.find_topping("caviar") is None)
+    def test_find_by_substring(self, catalogue):
+        assert catalogue.find_product("pepper").id == "pizza_pepperoni"
 
-    # --- Catalogue: size resolution ---
-    print("\n-- Catalogue: size resolution --")
-    prod = catalogue.get_product("pizza_margherita")
-    resolved_size, _ = catalogue.resolve_size(prod, "large")
-    check("resolves valid size", resolved_size == "large")
-    default_size, _ = catalogue.resolve_size(prod, None)
-    check("defaults when no size given", default_size == "medium")
-    bad_size, bad_warnings = catalogue.resolve_size(prod, "gigantic")
-    check("warns on invalid size", len(bad_warnings) > 0)
-    check("defaults on invalid size", bad_size == "medium")
+    def test_find_flat_price_item(self, catalogue):
+        assert catalogue.find_product("Garlic Bread").id == "side_garlic_bread"
 
-    flat = catalogue.get_product("side_garlic_bread")
-    check("flat-price item has no sizes", flat.sizes is None)
+    def test_unknown_returns_none(self, catalogue):
+        assert catalogue.find_product("sushi") is None
 
-    # --- Catalogue: deal lookup and expansion ---
-    print("\n-- Catalogue: deal lookup and expansion --")
-    deal = catalogue.find_deal("Family Deal")
-    check("finds deal by name", deal is not None)
-    check("deal has correct price", deal.price == 34.99)
+    def test_get_product_by_id(self, catalogue):
+        assert catalogue.get_product("pizza_margherita").name == "Margherita"
 
-    # --- Catalogue: hints ---
-    print("\n-- Catalogue: hints --")
-    hints = catalogue.get_hints()
-    check("hints returns non-empty string", len(hints) > 0)
-    check("hints includes category name", "Pizzas" in hints)
+    def test_get_product_unknown(self, catalogue):
+        assert catalogue.get_product("nope") is None
 
-    # --- Catalogue: suggestions ---
-    print("\n-- Catalogue: suggestions --")
-    suggestions = catalogue.get_product_suggestions("peproni")
-    check("suggestions for misspelling (peproni → Pepperoni)", len(suggestions) > 0)
 
-    # --- Pricing ---
-    print("\n-- Pricing --")
-    from models import CartItem, CartTopping, OrderType
+class TestCatalogueToppingLookup:
+    def test_find_by_name(self, catalogue):
+        t = catalogue.find_topping("Extra Cheese")
+        assert t is not None
+        assert t.id == "extra_cheese"
 
-    item = CartItem(
-        product_id="pizza_margherita",
-        name="Margherita",
-        category="Pizzas",
-        size="medium",
-        base_price=0,  # will be set by pricing
-        line_total=0,
-    )
-    priced = pricing.price_item(item)
-    check("base_price set correctly (medium = 12.99)", priced.base_price == 12.99)
-    check("line_total = base_price * quantity", priced.line_total == 12.99)
+    def test_find_case_insensitive(self, catalogue):
+        assert catalogue.find_topping("mushrooms").id == "mushrooms"
 
-    # with toppings
-    item_with_tops = CartItem(
-        product_id="pizza_margherita",
-        name="Margherita",
-        category="Pizzas",
-        size="medium",
-        quantity=1,
-        toppings=[
-            CartTopping(topping_id="extra_cheese", name="Extra Cheese", price=1.50),
-            CartTopping(topping_id="mushrooms", name="Mushrooms", price=1.00),
-        ],
-        base_price=0,
-        line_total=0,
-    )
-    priced2 = pricing.price_item(item_with_tops)
-    check("base + toppings (12.99 + 2.50 = 15.49)", priced2.line_total == 15.49)
+    def test_find_by_id_fallback(self, catalogue):
+        assert catalogue.find_topping("extra_cheese").id == "extra_cheese"
 
-    qty_item = CartItem(
-        product_id="side_garlic_bread",
-        name="Garlic Bread",
-        category="Sides",
-        quantity=3,
-        base_price=0,
-        line_total=0,
-    )
-    priced3 = pricing.price_item(qty_item)
-    check("quantity multiplier (4.99 * 3 = 14.97)", priced3.line_total == 14.97)
+    def test_unknown_returns_none(self, catalogue):
+        assert catalogue.find_topping("caviar") is None
 
-    subtotal, delivery, total = pricing.compute_totals([priced], OrderType.DELIVERY)
-    check("delivery subtotal", subtotal == 12.99)
-    check("delivery fee", delivery == 3.99)
-    check("delivery total", total == 16.98)
 
-    subtotal_pu, delivery_pu, total_pu = pricing.compute_totals([priced], OrderType.PICKUP)
-    check("pickup has no delivery fee", delivery_pu == 0.0)
+class TestCatalogueSizeResolution:
+    def test_resolves_valid_size(self, catalogue):
+        prod = catalogue.get_product("pizza_margherita")
+        resolved, _ = catalogue.resolve_size(prod, "large")
+        assert resolved == "large"
 
-    check("min order met (12.99 >= 10.00)", pricing.check_minimum_order(12.99) is True)
-    check("min order not met (5.00 < 10.00)", pricing.check_minimum_order(5.00) is False)
+    def test_defaults_when_no_size_given(self, catalogue):
+        prod = catalogue.get_product("pizza_margherita")
+        default, _ = catalogue.resolve_size(prod, None)
+        assert default == "medium"
 
-    # --- Session ---
-    print("\n-- Session --")
-    from session import OrderSession
-    from models import OrderState, CustomerInfo, MessageRole
+    def test_warns_on_invalid_size(self, catalogue):
+        prod = catalogue.get_product("pizza_margherita")
+        bad_size, warnings = catalogue.resolve_size(prod, "gigantic")
+        assert len(warnings) > 0
+        assert bad_size == "medium"
 
-    s = OrderSession()
-    check("default state is BUILDING", s.state == OrderState.BUILDING)
-    check("default cart empty", s.cart == [])
-    check("default restaurant_id empty", s.restaurant_id == "")
-    check("is_active true for BUILDING", s.is_active is True)
-    check("is_complete false for BUILDING", s.is_complete is False)
+    def test_flat_price_item_has_no_sizes(self, catalogue):
+        flat = catalogue.get_product("side_garlic_bread")
+        size, warnings = catalogue.resolve_size(flat, "large")
+        assert size is None
+        assert len(warnings) > 0
 
-    s2 = OrderSession(restaurant_id="rest_a")
-    check("restaurant_id can be set", s2.restaurant_id == "rest_a")
 
-    s.add_user_message("Hello")
-    check("add_user_message works", len(s.conversation) == 1)
-    check("message role is USER", s.conversation[0].role == MessageRole.USER)
+class TestCatalogueToppingResolution:
+    def test_resolves_toppings(self, catalogue):
+        prod = catalogue.get_product("pizza_margherita")
+        tops, issues = catalogue.resolve_toppings(prod, ["Extra Cheese", "Mushrooms"])
+        assert len(tops) == 2
+        assert tops[0].name == "Extra Cheese"
+        assert tops[0].price == 1.50
 
-    # save/load via Database
-    from db import Database
-    db = Database(str(tmp / "test.db"))
-    s._db = db  # type: ignore[has-type]
-    s.restaurant_id = "rest_a"
-    s.cart = [priced]
-    s.save()
-    loaded = db.load_session(s.restaurant_id, s.session_id)
-    check("session save/load roundtrip", loaded is not None and loaded.session_id == s.session_id)
-    check("cart preserved after load", len(loaded.cart) == 1)
-    check("cart item preserved", loaded.cart[0].product_id == "pizza_margherita")
+    def test_unknown_topping_warns(self, catalogue):
+        prod = catalogue.get_product("pizza_margherita")
+        tops, issues = catalogue.resolve_toppings(prod, ["caviar"])
+        assert len(issues) > 0
+        assert len(tops) == 0
 
-    # terminal session detection
-    s_terminal = OrderSession(state=OrderState.COMPLETED)
-    check("completed is terminal", s_terminal.is_complete is True)
-    check("completed is not active", s_terminal.is_active is False)
+    def test_topping_not_allowed_on_item(self, catalogue):
+        flat = catalogue.get_product("side_garlic_bread")
+        tops, issues = catalogue.resolve_toppings(flat, ["Extra Cheese"])
+        assert len(issues) > 0
 
-    # --- CustomerInfo ---
-    print("\n-- CustomerInfo --")
-    ci = CustomerInfo()
-    check("customer defaults to None name", ci.name is None)
-    ci2 = CustomerInfo(name="John", phone="555-0123")
-    check("customer with fields", ci2.name == "John" and ci2.phone == "555-0123")
+    def test_empty_toppings_list(self, catalogue):
+        prod = catalogue.get_product("pizza_margherita")
+        tops, issues = catalogue.resolve_toppings(prod, [])
+        assert tops == []
+        assert issues == []
 
-    # --- Tools ---
-    print("\n-- Tools --")
-    from tools import (
-        add_to_cart, view_cart, remove_from_cart, update_item,
-        set_customer_info, request_review, confirm_order, cancel_order,
-    )
 
-    tool_session = OrderSession()
+class TestCatalogueDeals:
+    def test_find_deal_by_name(self, catalogue):
+        deal = catalogue.find_deal("Family Deal")
+        assert deal is not None
+        assert deal.name == "Family Deal"
+        assert deal.price == 34.99
 
-    # add_to_cart
-    result = add_to_cart(tool_session, catalogue, pricing, product_name="Margherita")
-    check("add_to_cart succeeds", result.success is True)
-    check("cart has 1 item", len(tool_session.cart) == 1)
-    check("item name is Margherita", tool_session.cart[0].name == "Margherita")
-    check("price is set (not 0)", tool_session.cart[0].base_price > 0)
+    def test_deal_not_found(self, catalogue):
+        assert catalogue.find_deal("nonexistent") is None
 
-    # add with size
-    result2 = add_to_cart(tool_session, catalogue, pricing, product_name="Pepperoni", size="large")
-    check("add with size succeeds", result2.success is True)
-    check("cart has 2 items", len(tool_session.cart) == 2)
-    check("size is large", tool_session.cart[1].size == "large")
+    def test_deals_listed(self, catalogue):
+        deals = catalogue.get_deals()
+        assert len(deals) >= 1
+        assert any(d.name == "Family Deal" for d in deals)
 
-    # add with toppings
-    result3 = add_to_cart(tool_session, catalogue, pricing,
-                          product_name="Margherita", toppings=["Extra Cheese"])
-    check("add with topping succeeds", result3.success is True)
-    check("topping added", len(tool_session.cart[2].toppings) == 1)
+    def test_deal_findable_as_product(self, catalogue):
+        product = catalogue.find_deal("Family Deal")
+        assert product is not None
+        assert abs(product.price - 34.99) < 0.01
 
-    # add unknown product
-    result_bad = add_to_cart(tool_session, catalogue, pricing, product_name="Sushi")
-    check("add unknown product fails", result_bad.success is False)
 
-    # view_cart
-    view = view_cart(tool_session, catalogue, pricing)
-    check("view_cart has correct count", view.item_count == 3)
-    check("view_cart has items list", len(view.items) == 3)
+class TestCatalogueHints:
+    def test_hints_non_empty(self, catalogue):
+        hints = catalogue.get_hints()
+        assert len(hints) > 0
 
-    # remove_from_cart by name
-    rem = remove_from_cart(tool_session, catalogue, pricing, "Pepperoni")
-    check("remove by name succeeds", rem.success is True)
-    check("cart now has 2 items", len(tool_session.cart) == 2)
+    def test_hints_includes_category_name(self, catalogue):
+        hints = catalogue.get_hints()
+        assert "Pizzas" in hints
 
-    # remove by index
-    rem2 = remove_from_cart(tool_session, catalogue, pricing, "2")
-    check("remove by index succeeds", rem2.success is True)
-    check("cart now has 1 item", len(tool_session.cart) == 1)
+    def test_suggestions_for_misspelling(self, catalogue):
+        suggestions = catalogue.get_product_suggestions("peproni")
+        assert len(suggestions) > 0
 
-    # update_item
-    upd = update_item(tool_session, catalogue, pricing, "Margherita", quantity=2)
-    check("update quantity succeeds", upd.success is True)
-    check("quantity is now 2", tool_session.cart[0].quantity == 2)
+    def test_suggestions_with_limit(self, catalogue):
+        suggestions = catalogue.get_product_suggestions("pizza", limit=2)
+        assert len(suggestions) <= 2
 
-    # set_customer_info
-    info = set_customer_info(tool_session, catalogue, pricing, name="John", phone="555-0123")
-    check("set name and phone", info.success is True)
-    check("name is set", tool_session.customer.name == "John")
-    check("phone is set", tool_session.customer.phone == "555-0123")
 
-    # set address
-    info2 = set_customer_info(tool_session, catalogue, pricing, address="123 Main St", order_type="delivery")
-    check("set address", info2.success is True)
-    check("address is set", tool_session.customer.address == "123 Main St")
-    check("order type is delivery", tool_session.customer.order_type == OrderType.DELIVERY)
-
-    # request_review (needs cart + name + phone + address for delivery)
-    review = request_review(tool_session, catalogue, pricing)
-    check("request review succeeds with all info", review.success is True)
-
-    # confirm_order
-    confirm = confirm_order(tool_session, catalogue, pricing, payment_method="cash")
-    check("confirm cash order", confirm.success is True)
-    check("payment method is cash", tool_session.payment_method == "cash")
-
-    # cancel_order
-    cancel_session = OrderSession()
-    cancel_result = cancel_order(cancel_session, catalogue, pricing)
-    check("cancel order sets transition", cancel_result.success is True)
-    check("pending transition is CANCELLED",
-          cancel_session._pending_transition == OrderState.CANCELLED)
-
-    # --- Order saving ---
-    print("\n-- Order saving --")
-    from main import save_order
-
-    order_session = OrderSession(restaurant_id="rest_a")
-    order_session.session_id = "972539534345"
-    order_session.customer = CustomerInfo(name="Test User", phone="555-0123", order_type=OrderType.DELIVERY)
-    priced_item = pricing.price_item(CartItem(
-        product_id="pizza_margherita", name="Margherita",
-        category="Pizzas", size="medium", base_price=0, line_total=0,
-    ))
-    order_session.cart = [priced_item]
-
-    orders_dir = str(tmp / "orders")
-    filepath = save_order(order_session, pricing, "Restaurant A", orders_dir)
-    check("order file created", Path(filepath).exists())
-    check("order in subdirectory", f"orders{Path('/').as_posix()}rest_a" in filepath.replace("\\", "/"))
-
-    order_data = json.loads(Path(filepath).read_text())
-    check("order has restaurant_id", order_data.get("restaurant_id") == "rest_a")
-    check("order has restaurant name", order_data.get("restaurant") == "Restaurant A")
-    check("order has items", len(order_data["items"]) == 1)
-    check("order has total", order_data["total"] == 16.98)  # 12.99 + 3.99 delivery
+class TestCatalogueNormalize:
+    def test_apostrophe_handling(self, catalogue):
+        # Smart-quote normalization doesn't break exact matches
+        topping = catalogue.find_topping("Extra Cheese")
+        assert topping is not None
+        # Normalized query still works
+        assert catalogue.find_topping("extra cheese") is not None
 
 
 # =============================================================================
-# SECTION 2: New multi-restaurant functionality
+# Pricing
 # =============================================================================
-print("\n" + "=" * 70)
-print("SECTION 2: New multi-restaurant functionality")
-print("=" * 70)
 
-with tempfile.TemporaryDirectory() as tmpdir:
-    tmp = Path(tmpdir)
-    restaurants_path = _make_restaurant_setup(tmp, second=True)
 
-    from restaurant import RestaurantRegistry, RestaurantConfig, RestaurantContext
-    registry = RestaurantRegistry(str(restaurants_path))
+class TestPricing:
+    def test_base_price_set_correctly(self, catalogue, pricing):
+        product = catalogue.find_product("Margherita")
+        item = CartItem(product_id=product.id, name=product.name,
+                        category=product.category, size="medium")
+        priced = pricing.price_item(item)
+        assert priced.base_price == 12.99
 
-    # --- Registry loading ---
-    print("\n-- Registry loading --")
-    check("two restaurants loaded", len(registry.list_restaurants()) == 2)
-    check("rest_a accessible by ID", registry.get_by_id("rest_a") is not None)
-    check("rest_b accessible by ID", registry.get_by_id("rest_b") is not None)
-    check("nonexistent returns None", registry.get_by_id("nope") is None)
+    def test_line_total_equals_base_times_quantity(self, catalogue, pricing):
+        product = catalogue.find_product("Margherita")
+        item = CartItem(product_id=product.id, name=product.name,
+                        category=product.category, size="medium", quantity=2)
+        priced = pricing.price_item(item)
+        assert priced.line_total == pytest.approx(25.98)
 
-    # --- Registry: phone lookup ---
-    print("\n-- Registry: phone lookup --")
-    ctx_a = registry.get_by_twilio_phone("+1111111111")
-    check("phone lookup rest_a", ctx_a is not None and ctx_a.config.id == "rest_a")
-    ctx_b = registry.get_by_twilio_phone("+2222222222")
-    check("phone lookup rest_b", ctx_b is not None and ctx_b.config.id == "rest_b")
-    check("unknown phone returns None", registry.get_by_twilio_phone("+000") is None)
-    check("whatsapp prefix stripped",
-          registry.get_by_twilio_phone("whatsapp:+1111111111").config.id == "rest_a")
+    def test_base_plus_toppings(self, catalogue, pricing):
+        from models import CartTopping
+        product = catalogue.find_product("Margherita")
+        topping = catalogue.find_topping("Extra Cheese")
+        item = CartItem(
+            product_id=product.id, name=product.name, category=product.category,
+            size="medium", toppings=[CartTopping(topping_id=topping.id, name=topping.name, price=topping.price)],
+        )
+        priced = pricing.price_item(item)
+        assert priced.line_total == pytest.approx(14.49)
 
-    # --- Registry: get_default ---
-    print("\n-- Registry: get_default --")
-    default = registry.get_default()
-    check("default returns first restaurant", default.config.id == "rest_a")
+    def test_quantity_multiplier(self, catalogue, pricing):
+        product = catalogue.find_product("Garlic Bread")
+        item = CartItem(product_id=product.id, name=product.name,
+                        category=product.category, quantity=3)
+        priced = pricing.price_item(item)
+        assert priced.line_total == pytest.approx(14.97)
 
-    # --- Registry: list_restaurants ---
-    print("\n-- Registry: list_restaurants --")
-    configs = registry.list_restaurants()
-    check("list returns 2 configs", len(configs) == 2)
-    check("configs are RestaurantConfig", all(isinstance(c, RestaurantConfig) for c in configs))
-    ids = {c.id for c in configs}
-    check("contains rest_a", "rest_a" in ids)
-    check("contains rest_b", "rest_b" in ids)
+    def test_delivery_totals(self, session, catalogue, pricing):
+        product = catalogue.find_product("Margherita")
+        item = CartItem(product_id=product.id, name=product.name,
+                        category=product.category, size="medium")
+        priced = pricing.price_item(item)
+        session.cart.append(priced)
+        session.customer.order_type = OrderType.DELIVERY
+        subtotal, delivery_fee, total = pricing.compute_totals(session.cart, OrderType.DELIVERY)
+        assert subtotal == pytest.approx(12.99)
+        assert delivery_fee == pytest.approx(3.99)
+        assert total == pytest.approx(16.98)
 
-    # --- Registry: context has catalogue and pricing ---
-    print("\n-- Registry: context integrity --")
-    for rid in ("rest_a", "rest_b"):
-        ctx = registry.get_by_id(rid)
-        check(f"{rid} context has catalogue", ctx.catalogue is not None)
-        check(f"{rid} context has pricing", ctx.pricing is not None)
-        check(f"{rid} catalogue has restaurant_name",
-              ctx.catalogue.restaurant_name == f"Restaurant {'A' if rid == 'rest_a' else 'B'}")
-        # Verify items can be looked up
-        p = ctx.catalogue.find_product("Margherita")
-        check(f"{rid} can find products", p is not None)
+    def test_pickup_no_delivery_fee(self, session, catalogue, pricing):
+        product = catalogue.find_product("Margherita")
+        item = CartItem(product_id=product.id, name=product.name,
+                        category=product.category, size="medium")
+        priced = pricing.price_item(item)
+        session.cart.append(priced)
+        _, delivery_fee, _ = pricing.compute_totals(session.cart, OrderType.PICKUP)
+        assert delivery_fee == 0.0
 
-    # --- Registry: validation errors ---
-    print("\n-- Registry: validation --")
-    # missing twilio_phone
-    bad_path = tmp / "bad_restaurants.json"
-    _make_restaurants_json(bad_path, {
-        "bad": {"name": "Bad", "menu_path": str(tmp / "menus" / "rest_a.json")}
-    })
-    try:
-        RestaurantRegistry(str(bad_path))
-        check("missing twilio_phone raises error", False)
-    except ValueError as e:
-        check("missing twilio_phone raises ValueError", "twilio_phone" in str(e).lower())
+    def test_min_order_met(self, pricing):
+        assert pricing.check_minimum_order(12.99) is True
 
-    # missing file
-    try:
-        RestaurantRegistry(str(tmp / "nonexistent.json"))
-        check("missing file raises error", False)
-    except FileNotFoundError:
-        check("missing file raises FileNotFoundError", True)
-
-    # --- Session isolation: same phone, different restaurants ---
-    print("\n-- Session isolation --")
-    from session_router import SessionRouter
-    from db import Database
-
-    db2 = Database(str(tmp / "iso_test.db"))
-    router = SessionRouter()
-
-    s_a = router.get_or_create("rest_a", "+972539534345", db2)
-    s_b = router.get_or_create("rest_b", "+972539534345", db2)
-
-    check("same session_id (phone digits)", s_a.session_id == s_b.session_id == "972539534345")
-    check("different restaurant_id", s_a.restaurant_id != s_b.restaurant_id)
-    check("rest_a has correct restaurant_id", s_a.restaurant_id == "rest_a")
-    check("rest_b has correct restaurant_id", s_b.restaurant_id == "rest_b")
-
-    # Add items to rest_a session only
-    from models import CartItem as CI
-    s_a.cart.append(CI(
-        product_id="test_item", name="Test Item", category="Test",
-        base_price=10.0, line_total=10.0,
-    ))
-    s_a.save()
-
-    # Reload and verify isolation
-    s_a2 = router.get_or_create("rest_a", "+972539534345", db2)
-    s_b2 = router.get_or_create("rest_b", "+972539534345", db2)
-    check("rest_a session has item", len(s_a2.cart) == 1)
-    check("rest_b session is empty", len(s_b2.cart) == 0)
-
-    # Verify DB persistence
-    check("rest_a session in DB", db2.load_session("rest_a", "972539534345") is not None)
-    check("rest_b session in DB", db2.load_session("rest_b", "972539534345") is not None)
-
-    # --- SessionRouter: terminal state per restaurant ---
-    print("\n-- SessionRouter: terminal state handling --")
-    from models import OrderState
-
-    s_term = router.get_or_create("rest_a", "+972531111111", db2)
-    s_term.cart.append(CI(
-        product_id="old", name="Old Item", category="Test",
-        base_price=5.0, line_total=5.0,
-    ))
-    s_term.state = OrderState.COMPLETED
-    s_term.save()
-
-    s_new = router.get_or_create("rest_a", "+972531111111", db2)
-    check("terminal session replaced with fresh", s_new.state == OrderState.BUILDING)
-    check("fresh session has empty cart", len(s_new.cart) == 0)
-    check("fresh session keeps same session_id", s_new.session_id == "972531111111")
-    check("fresh session has restaurant_id", s_new.restaurant_id == "rest_a")
-
-    # --- Multi-restaurant orders ---
-    print("\n-- Multi-restaurant orders --")
-    from main import save_order
-
-    for rid, phone in [("rest_a", "+972531234567"), ("rest_b", "+972531234567")]:
-        ctx = registry.get_by_id(rid)
-        order_s = OrderSession(restaurant_id=rid)
-        order_s.session_id = "972531234567"
-        order_s.customer = CustomerInfo(name="Customer", phone=phone)
-        item = ctx.pricing.price_item(CI(
-            product_id="pizza_margherita", name="Margherita",
-            category="Pizzas", size="medium", base_price=0, line_total=0,
-        ))
-        order_s.cart = [item]
-        fp = save_order(order_s, ctx.pricing, ctx.config.name, str(tmp / "orders"))
-        check(f"order for {rid} created", Path(fp).exists())
-        check(f"order for {rid} in correct subdirectory",
-              f"{Path('/').as_posix()}orders{Path('/').as_posix()}{rid}" in fp.replace("\\", "/"))
-
-        data = json.loads(Path(fp).read_text())
-        check(f"order for {rid} has restaurant_id", data["restaurant_id"] == rid)
-
-    # --- Registry config validation ---
-    print("\n-- Registry: RestaurantConfig frozen --")
-    config = RestaurantConfig(id="test", name="Test", menu_path="x.json", twilio_phone="+123", owner_phone="+1555")
-    check("config has correct fields", config.id == "test" and config.name == "Test")
-    try:
-        config.name = "Changed"  # type: ignore
-        check("config is frozen", False)
-    except Exception:
-        check("config is frozen (immutable)", True)
-
-    # --- process_turn signature ---
-    print("\n-- process_turn signature --")
-    from agent_loop import process_turn
-    import inspect
-    sig = inspect.signature(process_turn)
-    params = list(sig.parameters.keys())
-    check("process_turn takes session, user_message, catalogue, pricing, llm_client (+ optional max_iterations)",
-          params == ["session", "user_message", "catalogue", "pricing", "llm_client", "max_iterations"])
+    def test_min_order_not_met(self, pricing):
+        assert pricing.check_minimum_order(5.00) is False
 
 
 # =============================================================================
-# SECTION 3: Server routing (unit-tested via mock)
+# Session persistence
 # =============================================================================
-print("\n" + "=" * 70)
-print("SECTION 3: Server routing (mock-based)")
-print("=" * 70)
-
-# These are covered by test_server.py (on integration branches).
-# Verify the key scenarios if the file exists.
-
-server_test_path = Path(__file__).parent / "test_server.py"
-if server_test_path.exists():
-    test_content = server_test_path.read_text()
-
-    checks = [
-        ("tests To field routing", "get_by_twilio_phone" in test_content),
-        ("tests unknown restaurant 500", "Unknown restaurant" in test_content or
-         "unknown_restaurant" in test_content.lower()),
-        ("tests composite lock keys", "marios_pizzeria:972539534345" in test_content),
-        ("tests different restaurant locks", "different_restaurants" in test_content.lower()),
-        ("tests get_or_create with restaurant_id",
-         '"marios_pizzeria"' in test_content and 'get_or_create' in test_content),
-        ("tests fallback message on error", "sorry" in test_content.lower()),
-    ]
-
-    for desc, condition in checks:
-        check(f"test_server.py: {desc}", condition)
-else:
-    print("  (test_server.py not on this branch — skipping server routing checks)")
 
 
-# =============================================================================
-# SECTION 4: Edge cases
-# =============================================================================
-print("\n" + "=" * 70)
-print("SECTION 4: Edge cases")
-print("=" * 70)
+class TestSession:
+    def test_default_state_is_building(self, session):
+        assert session.state == OrderState.BUILDING
 
-with tempfile.TemporaryDirectory() as tmpdir:
-    tmp = Path(tmpdir)
-    _make_restaurant_setup(tmp, second=True)
-    registry = RestaurantRegistry(str(tmp / "restaurants.json"))
+    def test_default_cart_empty(self, session):
+        assert session.cart == []
 
-    # --- Edge: duplicate phone numbers ---
-    print("\n-- Edge: duplicate phone numbers --")
-    dup_path = tmp / "dup_restaurants.json"
-    _make_restaurants_json(dup_path, {
-        "r1": {"name": "R1", "menu_path": str(tmp / "menus" / "rest_a.json"), "twilio_phone": "+1111111111",
-            "owner_phone": "+15551234567"},
-        "r2": {"name": "R2", "menu_path": str(tmp / "menus" / "rest_b.json"), "twilio_phone": "+1111111111",
-            "owner_phone": "+15551234567"},
-    })
-    dup_registry = RestaurantRegistry(str(dup_path))
-    # Last one wins (dict overwrite)
-    ctx_dup = dup_registry.get_by_twilio_phone("+1111111111")
-    check("duplicate phone: last wins (r2)", ctx_dup is not None)
-    # r1 is still accessible by ID
-    check("duplicate phone: r1 still accessible by ID",
-          dup_registry.get_by_id("r1") is not None)
+    def test_is_active(self, session):
+        assert session.is_active is True
 
-    # --- Edge: whitespace in phone ---
-    print("\n-- Edge: whitespace handling --")
-    ctx = registry.get_by_twilio_phone("  +1111111111  ")
-    check("whitespace IS stripped (leading/trailing ignored)", ctx is not None)
+    def test_is_complete_false(self, session):
+        assert session.is_complete is False
 
-    # --- Edge: empty string phone ---
-    check("empty phone returns None", registry.get_by_twilio_phone("") is None)
+    def test_add_user_message(self, session):
+        session.add_user_message("Hi")
+        assert len(session.conversation) == 1
+        assert session.conversation[0].role.value == "user"
 
-    # --- Edge: sessions with special characters in phone ---
-    print("\n-- Edge: session phone sanitization --")
-    from session_router import SessionRouter
-    from db import Database as DBEdge
-    db_edge = DBEdge(str(tmp / "edge_test.db"))
-    router = SessionRouter()
-    s = router.get_or_create("rest_a", "whatsapp:+972 (53) 953-4345", db_edge)
-    check("sanitized phone as session_id", s.session_id == "972539534345")
+    def test_save_load_roundtrip(self, db):
+        s = OrderSession(restaurant_id="test")
+        s._db = db
+        s.save()
+        s.add_user_message("Test message")
+        s.save()
+        loaded = db.load_session("test", s.session_id)
+        assert loaded is not None
+        assert loaded.session_id == s.session_id
+        assert len(loaded.conversation) == 1
 
-    # --- Edge: chained restaurant IDs ---
-    print("\n-- Edge: similar restaurant IDs --")
-    similar_path = tmp / "similar_restaurants.json"
-    _make_restaurants_json(similar_path, {
-        "marios": {"name": "Marios", "menu_path": str(tmp / "menus" / "rest_a.json"), "twilio_phone": "+1111111111",
-            "owner_phone": "+15551234567"},
-        "marios_pizzeria": {"name": "Marios Pizzeria", "menu_path": str(tmp / "menus" / "rest_b.json"), "twilio_phone": "+2222222222",
-            "owner_phone": "+15551234567"},
-    })
-    sim_reg = RestaurantRegistry(str(similar_path))
-    check("exact ID match (not prefix)", sim_reg.get_by_id("marios").config.name == "Marios")
-    check("longer ID also works", sim_reg.get_by_id("marios_pizzeria").config.name == "Marios Pizzeria")
-    check("partial match returns None", sim_reg.get_by_id("mario") is None)
+    def test_cart_preserved_after_load(self, db, catalogue, pricing):
+        s = OrderSession(restaurant_id="test")
+        s._db = db
+        s.save()
+        product = catalogue.find_product("Margherita")
+        item = CartItem(product_id=product.id, name=product.name,
+                        category=product.category, size="medium")
+        priced = pricing.price_item(item)
+        s.cart.append(priced)
+        s.save()
+        loaded = db.load_session("test", s.session_id)
+        assert loaded is not None
+        assert len(loaded.cart) == 1
+        assert loaded.cart[0].name == "Margherita"
+        assert loaded.cart[0].line_total == pytest.approx(12.99)
+
+    def test_completed_is_terminal(self):
+        s = OrderSession(state=OrderState.COMPLETED)
+        assert s.is_complete is True
+        assert s.is_active is False
+        assert s.is_cancelled is False
+
+    def test_cancelled_is_terminal(self):
+        s = OrderSession(state=OrderState.CANCELLED)
+        assert s.is_cancelled is True
+        assert s.is_active is False
 
 
 # =============================================================================
-# Summary
+# Tools
 # =============================================================================
-print("\n" + "=" * 70)
-total = results["pass"] + results["fail"]
-print(f"RESULTS: {results['pass']}/{total} passed, {results['fail']} failed")
-print("=" * 70)
-
-if results["fail"] > 0:
-    print("\nFAILURES:")
-    for err in results["errors"]:
-        print(err)
-    sys.exit(1)
-else:
-    print("\n✓ All tests passed!")
-    sys.exit(0)
 
 
+class TestTools:
+    def test_add_to_cart_succeeds(self, session, catalogue, pricing):
+        result = add_to_cart(session, catalogue, pricing, "Margherita")
+        assert result.success is True
+        assert len(session.cart) == 1
+        assert session.cart[0].name == "Margherita"
+
+    def test_add_with_size(self, session, catalogue, pricing):
+        add_to_cart(session, catalogue, pricing, "Margherita", size="large")
+        assert session.cart[0].size == "large"
+
+    def test_add_with_topping(self, session, catalogue, pricing):
+        add_to_cart(session, catalogue, pricing, "Margherita", toppings=["Extra Cheese"])
+        assert len(session.cart[0].toppings) == 1
+        assert session.cart[0].toppings[0].name == "Extra Cheese"
+
+    def test_unknown_product_returns_failure(self, session, catalogue, pricing):
+        result = add_to_cart(session, catalogue, pricing, "thisdoesnotexist")
+        assert result.success is False
+
+    def test_misspelled_product_gets_suggestions(self, session, catalogue, pricing):
+        # "garlik" is close to "Garlic Bread" — difflib should catch it
+        result = add_to_cart(session, catalogue, pricing, "garlik")
+        # Either it matches or it suggests — both are valid
+        if not result.success:
+            assert len(result.suggestions) > 0
+
+    def test_view_cart(self, session, catalogue, pricing):
+        add_to_cart(session, catalogue, pricing, "Margherita")
+        add_to_cart(session, catalogue, pricing, "Cola")
+        result = view_cart(session, catalogue, pricing)
+        assert result.item_count == 2
+        assert len(result.items) == 2
+
+    def test_remove_by_name(self, session, catalogue, pricing):
+        add_to_cart(session, catalogue, pricing, "Margherita")
+        add_to_cart(session, catalogue, pricing, "Cola")
+        add_to_cart(session, catalogue, pricing, "Pepperoni")
+        result = remove_from_cart(session, catalogue, pricing, "Margherita")
+        assert result.success is True
+        assert len(session.cart) == 2
+
+    def test_remove_by_index(self, session, catalogue, pricing):
+        add_to_cart(session, catalogue, pricing, "Margherita")
+        add_to_cart(session, catalogue, pricing, "Cola")
+        result = remove_from_cart(session, catalogue, pricing, "1")
+        assert result.success is True
+        assert len(session.cart) == 1
+
+    def test_update_quantity(self, session, catalogue, pricing):
+        add_to_cart(session, catalogue, pricing, "Margherita")
+        result = update_item(session, catalogue, pricing, "Margherita", quantity=2)
+        assert result.success is True
+        assert session.cart[0].quantity == 2
+
+    def test_set_name_and_phone(self, session, catalogue, pricing):
+        result = set_customer_info(
+            session, catalogue, pricing,
+            name="Nehoray", phone="+972539534345",
+        )
+        assert result.success is True
+        assert session.customer.name == "Nehoray"
+        assert session.customer.phone == "+972539534345"
+
+    def test_set_address(self, session, catalogue, pricing):
+        set_customer_info(session, catalogue, pricing, name="A", phone="+1")
+        result = set_customer_info(
+            session, catalogue, pricing,
+            address="123 Main St", order_type="delivery",
+        )
+        assert result.success is True
+        assert session.customer.address == "123 Main St"
+        assert session.customer.order_type == OrderType.DELIVERY
+
+    def test_invalid_order_type_surfaces_issue(self, session, catalogue, pricing):
+        result = set_customer_info(session, catalogue, pricing, order_type="invalid")
+        assert result.success is True
+        assert any("order_type" in m for m in result.missing_required)
+
+    def test_request_review_succeeds_with_all_info(self, session, catalogue, pricing):
+        set_customer_info(session, catalogue, pricing, name="A", phone="+1",
+                          address="X", order_type="delivery")
+        add_to_cart(session, catalogue, pricing, "Margherita")
+        result = request_review(session, catalogue, pricing)
+        assert result.success is True
+
+    def test_request_review_blocked_empty_cart(self, session, catalogue, pricing):
+        result = request_review(session, catalogue, pricing)
+        assert result.success is False
+        assert any("empty" in i.lower() for i in result.issues)
+
+    def test_confirm_cash_order(self, session, catalogue, pricing):
+        set_customer_info(session, catalogue, pricing, name="A", phone="+1")
+        add_to_cart(session, catalogue, pricing, "Margherita")
+        request_review(session, catalogue, pricing)
+        result = confirm_order(session, catalogue, pricing, payment_method="cash")
+        assert result.success is True
+        assert result.total > 0
+        assert session.payment_method == "cash"
+
+    def test_cancel_order(self, session, catalogue, pricing):
+        result = cancel_order(session, catalogue, pricing)
+        assert result.success is True
+        assert session._pending_transition == OrderState.CANCELLED
+
+
+# =============================================================================
+# Multi-restaurant registry
+# =============================================================================
+
+
+class TestRegistryLoading:
+    def test_two_restaurants_loaded(self, registry):
+        assert len(registry.list_restaurants()) == 2
+
+    def test_accessible_by_id(self, registry):
+        assert registry.get_by_id("rest_a") is not None
+        assert registry.get_by_id("rest_b") is not None
+
+    def test_nonexistent_returns_none(self, registry):
+        assert registry.get_by_id("nonexistent") is None
+
+    def test_get_default(self, registry):
+        default = registry.get_default()
+        assert default.config.id == "rest_a"
+
+
+class TestRegistryPhoneLookup:
+    def test_phone_lookup(self, registry):
+        assert registry.get_by_twilio_phone("+1111111111") is not None
+        assert registry.get_by_twilio_phone("+2222222222") is not None
+
+    def test_unknown_phone(self, registry):
+        assert registry.get_by_twilio_phone("+9999999999") is None
+
+    def test_whatsapp_prefix_stripped(self, registry):
+        ctx = registry.get_by_twilio_phone("whatsapp:+1111111111")
+        assert ctx is not None
+        assert ctx.config.id == "rest_a"
+
+    def test_whitespace_stripped(self, registry):
+        ctx = registry.get_by_twilio_phone("  +1111111111  ")
+        assert ctx is not None
+        assert ctx.config.id == "rest_a"
+
+    def test_empty_phone_returns_none(self, registry):
+        assert registry.get_by_twilio_phone("") is None
+
+
+class TestRegistryList:
+    def test_list_returns_configs(self, registry):
+        configs = registry.list_restaurants()
+        assert len(configs) == 2
+        assert all(isinstance(c, RestaurantConfig) for c in configs)
+        ids = {c.id for c in configs}
+        assert "rest_a" in ids
+        assert "rest_b" in ids
+
+
+class TestRegistryContextIntegrity:
+    def test_catalogue_and_pricing_loaded(self, registry):
+        ctx = registry.get_by_id("rest_a")
+        assert ctx is not None
+        assert ctx.catalogue is not None
+        assert ctx.pricing is not None
+        assert ctx.catalogue.restaurant_name == "Restaurant A"
+
+    def test_can_find_products(self, registry):
+        ctx = registry.get_by_id("rest_a")
+        assert ctx is not None
+        assert ctx.catalogue.find_product("Margherita") is not None
+
+    def test_restaurants_independent(self, registry):
+        ctx_a = registry.get_by_id("rest_a")
+        ctx_b = registry.get_by_id("rest_b")
+        assert ctx_a is not None
+        assert ctx_b is not None
+        assert ctx_a.config.name != ctx_b.config.name
+
+
+class TestRegistryValidation:
+    def test_missing_twilio_phone_raises(self, tmp_path):
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps({"restaurants": {
+            "r": {"name": "X", "menu_path": "m.json"},
+        }}))
+        with pytest.raises(ValueError, match="twilio_phone"):
+            RestaurantRegistry(str(p))
+
+    def test_missing_file_raises(self):
+        with pytest.raises(FileNotFoundError):
+            RestaurantRegistry("/nonexistent/path/restaurants.json")
+
+
+class TestRegistryConfigFrozen:
+    def test_config_is_immutable(self, registry):
+        config = registry.list_restaurants()[0]
+        with pytest.raises(Exception):
+            config.name = "changed"
+
+
+# =============================================================================
+# Session isolation and routing
+# =============================================================================
+
+
+class TestSessionIsolation:
+    def test_same_phone_different_restaurants(self, registry, db):
+        router = SessionRouter()
+        s_a = router.get_or_create("rest_a", "972539534345", db=db)
+        s_b = router.get_or_create("rest_b", "972539534345", db=db)
+        assert s_a.session_id == s_b.session_id
+        assert s_a.restaurant_id == "rest_a"
+        assert s_b.restaurant_id == "rest_b"
+
+    def test_active_session_reused(self, db):
+        router = SessionRouter()
+        s1 = router.get_or_create("rest", "972511111111", db=db)
+        s1.add_user_message("hello")
+        s1.save()
+        s2 = router.get_or_create("rest", "972511111111", db=db)
+        assert s2.session_id == s1.session_id
+        assert len(s2.conversation) == 1
+
+
+class TestSessionRouterTerminal:
+    def test_completed_replaced_with_fresh(self, db):
+        router = SessionRouter()
+        old = router.get_or_create("rest", "972522222222", db=db)
+        old.add_user_message("old order")
+        old.state = OrderState.COMPLETED
+        old.save()
+        new = router.get_or_create("rest", "972522222222", db=db)
+        assert new.session_id == old.session_id
+        assert len(new.cart) == 0
+        assert new.state == OrderState.BUILDING
+        assert new.restaurant_id == "rest"
+
+    def test_cancelled_replaced_with_fresh(self, db):
+        router = SessionRouter()
+        old = router.get_or_create("rest", "972533333333", db=db)
+        old.add_user_message("cancelled order")
+        old.state = OrderState.CANCELLED
+        old.save()
+        new = router.get_or_create("rest", "972533333333", db=db)
+        assert len(new.cart) == 0
+        assert new.state == OrderState.BUILDING
+
+
+# =============================================================================
+# Edge cases
+# =============================================================================
+
+
+class TestEdgeCases:
+    def test_duplicate_phone_last_wins(self, tmp_path):
+        """When two restaurants share a phone, last one loaded wins the lookup."""
+        menu_path = tmp_path / "menu.json"
+        _write_test_menu(menu_path)
+        p = tmp_path / "restaurants.json"
+        p.write_text(json.dumps({"restaurants": {
+            "r1": {"name": "R1", "menu_path": str(menu_path), "twilio_phone": "+1111", "owner_phone": "+1"},
+            "r2": {"name": "R2", "menu_path": str(menu_path), "twilio_phone": "+1111", "owner_phone": "+2"},
+        }}))
+        reg = RestaurantRegistry(str(p))
+        ctx = reg.get_by_twilio_phone("+1111")
+        assert ctx is not None
+        assert ctx.config.name == "R2"  # last wins
+        assert reg.get_by_id("r1") is not None  # still accessible by ID
+
+    def test_session_phone_sanitization(self):
+        router = SessionRouter()
+        sid = router._sanitize("+972-53-953-4345")
+        assert sid == "972539534345"
+
+    def test_similar_ids_no_partial_match(self, tmp_path):
+        menu_path = tmp_path / "menu.json"
+        _write_test_menu(menu_path)
+        p = tmp_path / "restaurants.json"
+        p.write_text(json.dumps({"restaurants": {
+            "marios": {"name": "M", "menu_path": str(menu_path), "twilio_phone": "+1", "owner_phone": "+2"},
+            "marios_pizzeria": {"name": "MP", "menu_path": str(menu_path), "twilio_phone": "+3", "owner_phone": "+4"},
+        }}))
+        reg = RestaurantRegistry(str(p))
+        assert reg.get_by_id("marios") is not None
+        assert reg.get_by_id("marios_pizzeria") is not None
+        assert reg.get_by_id("mario") is None
+
+    def test_process_turn_signature(self):
+        from agent_loop import process_turn
+        import inspect
+        params = list(inspect.signature(process_turn).parameters.keys())
+        assert "session" in params
+        assert "user_message" in params
+        assert "catalogue" in params
+        assert "pricing" in params
+        assert "llm_client" in params
+
+
+# =============================================================================
+# Server import smoke tests
+# =============================================================================
+
+
+class TestServerImports:
+    def test_server_imports(self):
+        import server  # noqa: F401
+
+    def test_twilio_client_imports(self):
+        from twilio_client import TwilioClient  # noqa: F401

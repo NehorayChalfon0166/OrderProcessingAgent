@@ -102,8 +102,12 @@ class Database:
         self._db = SqliteDatabase(path, pragmas={
             "journal_mode": "wal",
             "foreign_keys": 1,
+            "busy_timeout": 5000,       # wait up to 5s instead of "database is locked"
+            "wal_autocheckpoint": 1000, # checkpoint after 1000 pages written
         })
         self._db.connect()
+        # Limit WAL file size to prevent unbounded growth under write load
+        self._db.execute_sql("PRAGMA journal_size_limit = 67108864")  # 64MB
 
         # Bind models to this database instance
         BaseModel._meta.database = self._db
