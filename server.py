@@ -33,6 +33,12 @@ from payment import create_checkout_session, verify_webhook
 from restaurant import RestaurantContext, RestaurantRegistry
 from session_router import SessionRouter
 from twilio_client import TwilioClient
+from voice_handler import (
+    build_error_twiml,
+    build_goodbye_twiml,
+    build_reply_twiml,
+    build_welcome_twiml,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +76,18 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
+def _flatten_form(form_body: bytes) -> dict[str, str]:
+    """Parse form-encoded POST body into a flat string dict."""
+    flat: dict[str, str] = {}
+    try:
+        parsed = parse_qs(form_body.decode("utf-8"))
+        for k, v in parsed.items():
+            flat[k] = v[0] if len(v) == 1 else v[-1]
+    except Exception:
+        pass
+    return flat
+
 
 def _check_rate_limit(phone: str) -> bool:
     if _cfg is None:
@@ -143,6 +161,17 @@ def _is_session_stale(session) -> bool:
         return False
     age = (datetime.now(timezone.utc) - updated).total_seconds()
     return age > stale_hours * 3600
+
+
+def _build_hints(catalogue) -> str:
+    """Build comma-separated STT hints from top-level menu item names."""
+    items: list[str] = []
+    for cat in catalogue.menu_data.get("categories", []):
+        for item in cat.get("items", []):
+            name = item.get("name", "")
+            if name:
+                items.append(name)
+    return ", ".join(items[:30])
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────
@@ -423,6 +452,177 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
 
     _sweep_stale_locks()
     return PlainTextResponse(_EMPTY_TWIML, media_type="application/xml")
+
+
+# ── Voice Webhooks ──────────────────────────────────────────────────────────
+
+
+@app.post("/voice/incoming")
+async def voice_incoming(request: Request) -> PlainTextResponse:
+    """Handle an incoming phone call — greet the caller and listen."""
+    if _twilio is None or _registry is None:
+        raise HTTPException(status_code=500, detail="Server not configured")
+
+    # Parse form data
+    form_body: bytes = await request.body()
+    flat_params: dict[str, str] = _flatten_form(form_body)
+
+    # Signature validation
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if not TwilioClient.validate_webhook(
+        str(request.url), flat_params, signature, _twilio.auth_token
+    ):
+        logger.warning("Invalid Twilio signature on /voice/incoming")
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+    # Route by dialed number
+    dialed = flat_params.get("To", "").strip()
+    restaurant_ctx = _registry.get_by_voice_phone(dialed)
+    if restaurant_ctx is None:
+        logger.warning("No restaurant for voice To=%s", dialed)
+        return PlainTextResponse(
+            build_error_twiml("Sorry, this number is not configured for ordering."),
+            media_type="application/xml",
+        )
+
+    hints = _build_hints(restaurant_ctx.catalogue)
+    action_url = f"/voice/speech-result?restaurant={restaurant_ctx.config.id}"
+    greeting = (
+        f"Welcome to {restaurant_ctx.config.name}! "
+        "What would you like to order?"
+    )
+
+    twiml = build_welcome_twiml(action_url, greeting, hints)
+    logger.info(
+        "Voice call from %s to %s (%s)",
+        flat_params.get("From", "?"), dialed, restaurant_ctx.config.id,
+    )
+    return PlainTextResponse(twiml, media_type="application/xml")
+
+
+@app.post("/voice/speech-result")
+async def voice_speech_result(request: Request) -> PlainTextResponse:
+    """Receive transcribed speech from Twilio and run the agent loop."""
+    if _twilio is None or _registry is None or _router is None or _llm is None:
+        raise HTTPException(status_code=500, detail="Server not initialised")
+
+    # Parse form data
+    form_body: bytes = await request.body()
+    flat_params: dict[str, str] = _flatten_form(form_body)
+
+    # Signature validation
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if not TwilioClient.validate_webhook(
+        str(request.url), flat_params, signature, _twilio.auth_token
+    ):
+        logger.warning("Invalid Twilio signature on /voice/speech-result")
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+    # Extract fields
+    speech_result = flat_params.get("SpeechResult", "").strip()
+    confidence_str = flat_params.get("Confidence", "")
+    caller_id = flat_params.get("From", "").strip()
+
+    # Restaurant routing via query param (set in <Gather action="...">)
+    restaurant_id = request.query_params.get("restaurant", "")
+    restaurant_ctx = _registry.get_by_id(restaurant_id)
+    if restaurant_ctx is None:
+        logger.error("Unknown restaurant '%s' in voice speech result", restaurant_id)
+        return PlainTextResponse(
+            build_error_twiml("Sorry, something went wrong. Please call back."),
+            media_type="application/xml",
+        )
+
+    hints = _build_hints(restaurant_ctx.catalogue)
+    action_url = f"/voice/speech-result?restaurant={restaurant_id}"
+
+    # Handle empty or low-confidence speech.
+    # Confidence is not guaranteed to be present — default to neutral trust.
+    if confidence_str:
+        try:
+            confidence = float(confidence_str)
+        except (ValueError, TypeError):
+            confidence = 0.5
+    else:
+        confidence = 0.5
+
+    if not speech_result or confidence < 0.2:
+        logger.info(
+            "Low-confidence speech (%.2f) from %s, retrying", confidence, caller_id,
+        )
+        return PlainTextResponse(
+            build_reply_twiml(
+                "I didn't quite catch that. Could you repeat your order?",
+                action_url, hints,
+            ),
+            media_type="application/xml",
+        )
+
+    logger.info("Voice speech from %s: %s", caller_id[:6], speech_result[:100])
+
+    # Rate limit
+    if not _check_rate_limit(caller_id):
+        await _inc_metric("webhooks_throttled")
+        logger.warning("Voice rate limit hit for %s", caller_id[:6])
+        return PlainTextResponse(
+            build_error_twiml("Too many requests. Please call back later."),
+            media_type="application/xml",
+        )
+
+    # Process
+    session = _router.get_or_create(restaurant_id, caller_id, db=_db)
+    lock_key = f"{restaurant_id}:{caller_id}"
+    async with _get_lock(lock_key):
+        try:
+            if _is_session_stale(session):
+                speech_result = (
+                    f"[The customer had an unfinished order from "
+                    f"{session.updated_at}. Ask if they want to continue "
+                    f"or start fresh before proceeding.]\n\n{speech_result}"
+                )
+
+            voice_timeout = min(_cfg.agent_timeout_seconds, 12.0) if _cfg else 12.0
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    process_turn,
+                    session, speech_result,
+                    restaurant_ctx.catalogue, restaurant_ctx.pricing, _llm,
+                    _cfg.max_iterations if _cfg else 5,
+                ),
+                timeout=voice_timeout,
+            )
+            session.save()
+            await _inc_metric("llm_calls")
+
+            # Voice orders are always cash — no payment link generation
+            if session.state == OrderState.PAYMENT_PENDING:
+                session.state = OrderState.COMPLETED
+                session.save()
+
+            if session.is_complete:
+                order_id = _save_order_file(session, restaurant_ctx)
+                _notify_restaurant(session, restaurant_ctx, order_id)
+                await _inc_metric("orders_today")
+                twiml = build_goodbye_twiml(response)
+            else:
+                twiml = build_reply_twiml(response, action_url, hints)
+
+        except asyncio.TimeoutError:
+            await _inc_metric("llm_errors")
+            logger.error("Voice agent timeout for %s", caller_id[:6])
+            twiml = build_error_twiml(
+                "Sorry, processing took too long. Please call back to try again."
+            )
+        except Exception as e:
+            await _inc_metric("llm_errors")
+            logger.error("process_turn failed for voice %s: %s", caller_id[:6], e)
+            twiml = build_error_twiml(
+                "Sorry, something went wrong while processing your order. "
+                "Please call back in a moment."
+            )
+
+    _sweep_stale_locks()
+    return PlainTextResponse(twiml, media_type="application/xml")
 
 
 # ── Payment Webhook ───────────────────────────────────────────────────────

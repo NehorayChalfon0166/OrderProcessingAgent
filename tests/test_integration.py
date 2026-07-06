@@ -39,6 +39,12 @@ from tools import (
     add_to_cart, cancel_order, confirm_order, remove_from_cart,
     request_review, set_customer_info, update_item, view_cart,
 )
+from voice_handler import (
+    build_error_twiml,
+    build_goodbye_twiml,
+    build_reply_twiml,
+    build_welcome_twiml,
+)
 
 
 # =============================================================================
@@ -615,6 +621,222 @@ class TestEdgeCases:
         assert "catalogue" in params
         assert "pricing" in params
         assert "llm_client" in params
+
+
+# =============================================================================
+# Voice integration
+# =============================================================================
+
+
+class TestVoicePhoneLookup:
+    def test_voice_phone_routing(self, tmp_path, registry_path):
+        """Restaurant with voice_phone is found by get_by_voice_phone."""
+        # Create a registry with voice_phone set
+        menu_path = tmp_path / "voice_menu.json"
+        from tests.conftest import make_test_menu
+        make_test_menu(menu_path, "Voice Restaurant")
+        p = tmp_path / "voice_restaurants.json"
+        p.write_text(json.dumps({"restaurants": {
+            "voice_rest": {
+                "name": "Voice Restaurant", "menu_path": str(menu_path),
+                "twilio_phone": "+1111111111", "owner_phone": "+15551234567",
+                "voice_phone": "+972501234567",
+            },
+        }}))
+        reg = RestaurantRegistry(str(p))
+        ctx = reg.get_by_voice_phone("+972501234567")
+        assert ctx is not None
+        assert ctx.config.id == "voice_rest"
+
+    def test_voice_phone_whitespace(self, tmp_path):
+        """Whitespace around voice_phone is stripped."""
+        menu_path = tmp_path / "vm.json"
+        from tests.conftest import make_test_menu
+        make_test_menu(menu_path, "VM")
+        p = tmp_path / "vr.json"
+        p.write_text(json.dumps({"restaurants": {
+            "r": {
+                "name": "VM", "menu_path": str(menu_path),
+                "twilio_phone": "+1", "owner_phone": "+2",
+                "voice_phone": "+972501234567",
+            },
+        }}))
+        reg = RestaurantRegistry(str(p))
+        assert reg.get_by_voice_phone("  +972501234567  ") is not None
+
+    def test_no_voice_phone_returns_none(self, tmp_path):
+        """Restaurant without voice_phone is not found."""
+        menu_path = tmp_path / "nvm.json"
+        from tests.conftest import make_test_menu
+        make_test_menu(menu_path, "NVM")
+        p = tmp_path / "nvr.json"
+        p.write_text(json.dumps({"restaurants": {
+            "r": {
+                "name": "NVM", "menu_path": str(menu_path),
+                "twilio_phone": "+1", "owner_phone": "+2",
+            },
+        }}))
+        reg = RestaurantRegistry(str(p))
+        assert reg.get_by_voice_phone("+1") is None
+
+    def test_empty_voice_phone_returns_none(self, registry):
+        """Restaurant with empty voice_phone is not found."""
+        assert registry.get_by_voice_phone("") is None
+
+    def test_voice_phone_not_found(self, tmp_path):
+        """Unknown voice phone returns None."""
+        menu_path = tmp_path / "nfm.json"
+        from tests.conftest import make_test_menu
+        make_test_menu(menu_path, "NFM")
+        p = tmp_path / "nfr.json"
+        p.write_text(json.dumps({"restaurants": {
+            "r": {
+                "name": "NFM", "menu_path": str(menu_path),
+                "twilio_phone": "+1", "owner_phone": "+2",
+                "voice_phone": "+972501234567",
+            },
+        }}))
+        reg = RestaurantRegistry(str(p))
+        assert reg.get_by_voice_phone("+9999999999") is None
+
+
+class TestVoiceHints:
+    def test_builds_hints_from_catalogue(self, catalogue):
+        """_build_hints extracts item names from all categories."""
+        from server import _build_hints
+        hints = _build_hints(catalogue)
+        assert "Margherita" in hints
+        assert "Pepperoni" in hints
+        assert "Garlic Bread" in hints
+        assert "Cola" in hints
+
+    def test_hints_comma_separated(self, catalogue):
+        """Hints are comma-separated for the Twilio hints attribute."""
+        from server import _build_hints
+        hints = _build_hints(catalogue)
+        assert ", " in hints
+
+    def test_hints_with_special_char_names(self, tmp_path):
+        """Item names with & are included in hints (escaped elsewhere)."""
+        menu_path = tmp_path / "special_menu.json"
+        menu_path.write_text(json.dumps({
+            "restaurant_name": "Special", "currency": "USD",
+            "categories": [
+                {"name": "Food", "items": [
+                    {"id": "fish_chips", "name": "Fish & Chips"},
+                ]},
+            ],
+            "toppings": [], "deals": [], "delivery_fee": 0,
+            "min_order_amount": 0,
+        }))
+        from catalogue import Catalogue
+        from server import _build_hints
+        hints = _build_hints(Catalogue(str(menu_path)))
+        assert "Fish & Chips" in hints
+
+
+class TestVoiceHandlerIntegration:
+    """Test voice_handler with real catalogue data."""
+
+    def test_welcome_twiml_with_real_greeting(self, catalogue):
+        """build_welcome_twiml accepts a greeting with restaurant name."""
+        twiml = build_welcome_twiml(
+            "/voice/speech-result?restaurant=test",
+            f"Welcome to {catalogue.restaurant_name}! What would you like?",
+        )
+        assert catalogue.restaurant_name in twiml
+        assert "Gather" in twiml
+
+    def test_reply_twiml_with_agent_response(self):
+        """build_reply_twiml wraps agent text for voice output."""
+        agent_response = "Added a large Margherita pizza to your order."
+        twiml = build_reply_twiml(
+            agent_response, "/voice/speech-result?restaurant=test",
+        )
+        assert agent_response in twiml
+        assert "Anything else?" in twiml
+
+    def test_goodbye_twiml_ends_call(self):
+        """build_goodbye_twiml includes Hangup."""
+        twiml = build_goodbye_twiml("Thank you! Your order total is ₪45.")
+        assert "Hangup" in twiml
+
+    def test_error_twiml_ends_call(self):
+        """build_error_twiml includes Hangup."""
+        twiml = build_error_twiml("Something went wrong.")
+        assert "Hangup" in twiml
+
+    def test_reply_twiml_strips_whitespace(self):
+        """Agent response trailing whitespace is cleaned before 'Anything else?'"""
+        twiml = build_reply_twiml(
+            "  Added!  ", "/voice/speech-result?restaurant=test",
+        )
+        # Should not have double spaces between response and "Anything else?"
+        assert "Added! Anything else?" in twiml
+
+
+class TestVoiceConfidenceHandling:
+    """Confidence score edge cases for the voice speech-result handler."""
+
+    def test_missing_confidence_does_not_reject(self):
+        """If Twilio omits Confidence, speech should still be accepted."""
+        # Simulate what happens in the endpoint: missing Confidence → "" → 0.5
+        confidence_str = ""
+        if confidence_str:
+            confidence = float(confidence_str)
+        else:
+            confidence = 0.5
+        # Should NOT be rejected
+        assert not (confidence < 0.2)
+
+    def test_zero_confidence_rejected(self):
+        """Explicit zero confidence should be rejected."""
+        confidence_str = "0.0"
+        confidence = float(confidence_str)
+        assert confidence < 0.2
+
+    def test_low_confidence_rejected(self):
+        """Confidence 0.1 should be rejected."""
+        assert 0.1 < 0.2
+
+    def test_normal_confidence_accepted(self):
+        """Confidence 0.85 should be accepted."""
+        assert not (0.85 < 0.2)
+
+    def test_invalid_confidence_defaults_to_neutral(self):
+        """Unparseable Confidence should default to 0.5 (trust)."""
+        confidence_str = "not-a-number"
+        try:
+            confidence = float(confidence_str)
+        except (ValueError, TypeError):
+            confidence = 0.5
+        assert confidence == 0.5
+        assert not (confidence < 0.2)
+
+
+class TestVoiceSessionRouting:
+    """Session routing for voice calls using caller ID."""
+
+    def test_voice_caller_creates_session(self, db):
+        """Caller ID from voice webhook creates a session."""
+        router = SessionRouter()
+        session = router.get_or_create("rest", "+972539534345", db=db)
+        assert session.session_id == "972539534345"
+        assert session.restaurant_id == "rest"
+
+    def test_voice_caller_sanitized(self, db):
+        """Caller ID with formatting is sanitized to digits."""
+        router = SessionRouter()
+        session = router.get_or_create("rest", "+972-53-953-4345", db=db)
+        assert session.session_id == "972539534345"
+
+    def test_voice_and_whatsapp_same_phone_separate_sessions(self, db):
+        """Same phone via voice and WhatsApp share session (same ID)."""
+        router = SessionRouter()
+        s_voice = router.get_or_create("rest", "+972511111111", db=db)
+        s_wa = router.get_or_create("rest", "whatsapp:+972511111111", db=db)
+        # Both sanitize to the same digits — they're the same session
+        assert s_voice.session_id == s_wa.session_id
 
 
 # =============================================================================

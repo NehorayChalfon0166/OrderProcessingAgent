@@ -37,8 +37,9 @@ class RestaurantConfig:
             this restaurant (e.g. "+14155238886").
         owner_phone: The restaurant owner's personal WhatsApp number.
             New-order notifications are sent here (not to twilio_phone).
-        domain: Bot domain name (default 'order'). Determines which tools
-            and system prompt the bot uses. See domain.py.
+        voice_phone: Optional Twilio voice number customers call to reach
+            this restaurant. If empty, voice ordering is disabled for this
+            restaurant.
     """
 
     id: str
@@ -46,6 +47,7 @@ class RestaurantConfig:
     menu_path: str
     twilio_phone: str
     owner_phone: str
+    voice_phone: str = ""
 
 
 @dataclass
@@ -92,6 +94,7 @@ class RestaurantRegistry:
         self._path = path
         self._by_id: dict[str, RestaurantContext] = {}
         self._by_phone: dict[str, RestaurantContext] = {}
+        self._by_voice_phone: dict[str, RestaurantContext] = {}
         self._configs: list[RestaurantConfig] = []
         self._load(path)
 
@@ -112,6 +115,16 @@ class RestaurantRegistry:
         cleaned = phone.removeprefix("whatsapp:").strip()
         return self._by_phone.get(cleaned)
 
+    def get_by_voice_phone(self, phone: str) -> RestaurantContext | None:
+        """Look up a restaurant by its Twilio voice phone number.
+
+        The phone number is cleaned of whitespace before lookup.
+        Returns None if the number is not registered as a voice number
+        for any restaurant.
+        """
+        cleaned = phone.strip()
+        return self._by_voice_phone.get(cleaned)
+
     def get_default(self) -> RestaurantContext:
         """Return the first restaurant in the configuration.
 
@@ -130,6 +143,7 @@ class RestaurantRegistry:
         """Reload all restaurants from the config file."""
         self._by_id.clear()
         self._by_phone.clear()
+        self._by_voice_phone.clear()
         self._configs.clear()
         self._load(self._path)
 
@@ -186,10 +200,13 @@ class RestaurantRegistry:
             ctx = RestaurantContext(config=config, catalogue=catalogue, pricing=pricing)
             self._by_id[config.id] = ctx
             self._by_phone[config.twilio_phone] = ctx
+            if config.voice_phone:
+                self._by_voice_phone[config.voice_phone] = ctx
             logger.info(
-                "Loaded restaurant '%s' (%s) — menu: %s, phone: %s, owner: %s",
+                "Loaded restaurant '%s' (%s) — menu: %s, phone: %s, owner: %s%s",
                 config.name, config.id, config.menu_path, config.twilio_phone,
                 config.owner_phone,
+                f", voice: {config.voice_phone}" if config.voice_phone else "",
             )
 
     @staticmethod
@@ -220,12 +237,15 @@ class RestaurantRegistry:
                 f"new-order notifications."
             )
 
+        voice_phone = data.get("voice_phone", "")
+
         return RestaurantConfig(
             id=rid,
             name=name,
             menu_path=menu_path,
             twilio_phone=twilio_phone,
             owner_phone=owner_phone,
+            voice_phone=voice_phone,
         )
 
 
@@ -251,6 +271,7 @@ def save_restaurant(
     twilio_phone: str,
     owner_phone: str,
     menu_path: str | None = None,
+    voice_phone: str = "",
 ) -> str:
     """Add or update a restaurant in restaurants.json. Writes atomically.
 
@@ -285,12 +306,15 @@ def save_restaurant(
     restaurants = raw.get("restaurants", {})
 
     is_new = restaurant_id not in restaurants
-    restaurants[restaurant_id] = {
+    entry: dict[str, str] = {
         "name": name,
         "menu_path": str(menu),
         "twilio_phone": twilio_phone,
         "owner_phone": owner_phone,
     }
+    if voice_phone:
+        entry["voice_phone"] = voice_phone
+    restaurants[restaurant_id] = entry
     raw["restaurants"] = restaurants
 
     atomic_write_json(config_path, raw)
