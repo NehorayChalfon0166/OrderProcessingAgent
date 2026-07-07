@@ -61,6 +61,10 @@ class AppConfig:
 
     # Auth
     api_token: str = ""
+    dashboard_token: str = ""
+
+    # Public URL (used for Stripe payment redirects — must be set in production)
+    public_base_url: str = ""
 
     # Debug
     debug: bool = False
@@ -100,6 +104,8 @@ class AppConfig:
             stripe_secret_key=os.getenv("STRIPE_SECRET_KEY", ""),
             stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET", ""),
             api_token=os.getenv("API_TOKEN", ""),
+            dashboard_token=os.getenv("DASHBOARD_TOKEN", ""),
+            public_base_url=os.getenv("PUBLIC_BASE_URL", ""),
             debug=os.getenv("DEBUG", "false").lower() == "true",
             log_json=os.getenv("LOG_JSON", "false").lower() == "true",
         )

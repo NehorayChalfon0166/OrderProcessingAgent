@@ -379,6 +379,47 @@ class TestCancelOrder:
 
 
 # =============================================================================
+# browse_menu
+# =============================================================================
+
+
+class TestBrowseMenu:
+    def test_returns_categories_and_deals(self, catalogue, pricing):
+        """browse_menu returns structured menu data."""
+        from tools import browse_menu
+        import server as _unused  # noqa (not needed for this test)
+        session = OrderSession(restaurant_id="marios_pizzeria")
+        result = browse_menu(session, catalogue, pricing)
+        assert result.restaurant_name == "Mario's Pizzeria"
+        assert len(result.categories) >= 4  # Pizzas, Sides, Drinks, Desserts
+        assert len(result.deals) == 3  # Family, Couple's, Party
+        assert result.delivery_fee == 3.99
+
+    def test_sized_items_have_sizes(self, catalogue, pricing):
+        """Pizzas have size→price dicts, flat-price items have a price field."""
+        from tools import browse_menu
+        session = OrderSession(restaurant_id="marios_pizzeria")
+        result = browse_menu(session, catalogue, pricing)
+        pizzas = next(c for c in result.categories if c["name"] == "Pizzas")
+        marg = next(i for i in pizzas["items"] if i["name"] == "Margherita")
+        assert "sizes" in marg
+        assert "small" in marg["sizes"]
+        drinks = next(c for c in result.categories if c["name"] == "Drinks")
+        water = next(i for i in drinks["items"] if i["name"] == "Bottled Water")
+        assert "price" in water
+
+    def test_available_toppings_listed(self, catalogue, pricing):
+        """Pizza items list available topping names (no prices)."""
+        from tools import browse_menu
+        session = OrderSession(restaurant_id="marios_pizzeria")
+        result = browse_menu(session, catalogue, pricing)
+        pizzas = next(c for c in result.categories if c["name"] == "Pizzas")
+        marg = next(i for i in pizzas["items"] if i["name"] == "Margherita")
+        assert "available_toppings" in marg
+        assert "Extra Cheese" in marg["available_toppings"]
+
+
+# =============================================================================
 # TOOLS_BY_STATE
 # =============================================================================
 

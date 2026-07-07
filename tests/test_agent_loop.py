@@ -271,8 +271,7 @@ class TestProcessTurn:
         from models import ToolCallRequest
         mock_client = MockLLMClient(responses=[
             # Iteration 1: browse the menu first
-            ("", [ToolCallRequest(id="c1", name="browse_menu",
-                                  arguments={"category": "Pizzas"})]),
+            ("", [ToolCallRequest(id="c1", name="browse_menu", arguments={})]),
             # Iteration 2: now add an item based on what was seen
             ("", [ToolCallRequest(id="c2", name="add_to_cart",
                                   arguments={"product_name": "Margherita", "quantity": 1})]),
@@ -324,9 +323,15 @@ class TestProcessTurn:
     def test_state_change_mid_loop(self, catalogue, pricing, db):
         """State changes during loop — next iteration gets new tool set."""
         session = _make_session(db)
-        # Place session in REVIEW state where confirm_order is available
+        # Place session in REVIEW state where confirm_order is available.
+        # Add an item meeting the minimum order amount ($10.00).
         session.state = OrderState.REVIEW
-        from models import ToolCallRequest
+        from models import CartItem, ToolCallRequest
+        item = CartItem(
+            product_id="pizza_margherita", name="Margherita", category="Pizzas",
+            quantity=1, base_price=12.0, line_total=12.0,
+        )
+        session.cart.append(item)
         mock_client = MockLLMClient(responses=[
             # Iteration 1: confirm the order
             ("", [ToolCallRequest(id="c1", name="confirm_order", arguments={})]),

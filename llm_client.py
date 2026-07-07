@@ -113,6 +113,10 @@ class LLMClient:
             "model": self._model,
             "messages": messages,
             "temperature": self._temperature,
+            # DeepSeek thinking mode returns reasoning_content that must be
+            # echoed back in subsequent requests. We don't use it, so disable
+            # it to avoid 400 errors on multi-turn conversations.
+            "extra_body": {"thinking": {"type": "disabled"}},
         }
         if tools:
             kwargs["tools"] = tools

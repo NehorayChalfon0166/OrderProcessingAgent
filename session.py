@@ -68,6 +68,11 @@ class OrderSession(BaseModel):
     # Excluded from serialization and never seen by the LLM.
     _pending_transition: OrderState | None = PrivateAttr(default=None)
 
+    # Order ID — set by confirm_order, read by channel-level save logic.
+    # Ensures the customer-facing confirmation number matches the persisted
+    # order ID and kitchen ticket.
+    _confirmed_order_id: str | None = PrivateAttr(default=None)
+
     # Database handle — set by SessionRouter or caller. When present,
     # save() delegates to the database instead of writing JSON files.
     _db: Database | None = PrivateAttr(default=None)

@@ -242,8 +242,9 @@ class Catalogue:
 
         Priority:
           1. Exact match (case-insensitive, punctuation-normalized)
-          2. Substring (query in key, or key in query)
-          3. difflib similarity ≥ 80% (handles typos, plurals, etc.)
+          2. Substring — requires exactly one unambiguous match
+          3. difflib similarity — length-gated to avoid short-query false positives
+             (e.g. "coke" → "Diet Coke" is a substring hit, not difflib)
         """
         q_norm = Catalogue._normalize(query)
 
@@ -255,20 +256,54 @@ class Catalogue:
         if q_norm in norm_index:
             return norm_index[q_norm]
 
-        # 2. Substring (check against normalized keys)
-        for key_norm, value in norm_index.items():
-            if q_norm in key_norm or key_norm in q_norm:
-                return value
+        # 2. Substring — collect ALL matches, require exactly one.
+        #    "coke" substring-matches "diet coke" but not "coca cola" — a
+        #    single match that is semantically wrong.  Short queries (≤4 chars)
+        #    skip substring matching entirely: they are too prone to false
+        #    positives, and the LLM handles suggestions well.
+        #    "chicken" matches "bbq chicken", "buffalo chicken", "chicken wings"
+        #    → 3 matches → ambiguous → return None (caller shows suggestions).
+        if len(q_norm) > 4:
+            substring_matches: list[object] = []
+            for key_norm, value in norm_index.items():
+                if q_norm in key_norm or key_norm in q_norm:
+                    substring_matches.append(value)
+            if len(substring_matches) == 1:
+                return substring_matches[0]
+            if len(substring_matches) > 1:
+                return None  # ambiguous — caller returns suggestions
 
-        # 3. difflib (compare normalized strings)
+        # 3. difflib — length-gated to avoid false positives on short queries
+        #    and queries that are substantially longer than the target.
+        #    "pepperoncini" (12 chars) vs "Pepperoni" (9 chars) scores 0.857
+        #    but is wrong — a query longer than the target suggests extra
+        #    characters, not a typo. Require the query to be at most ~15%
+        #    longer than the target.
+        if len(q_norm) < 4:
+            return None  # too short for reliable difflib matching
+
+        threshold = 0.85 if len(q_norm) < 6 else 0.80
         best_score = 0.0
         best_value = None
+        second_best = 0.0
         for key_norm, value in norm_index.items():
+            # If the query is longer than the target, require high length
+            # similarity — extra chars aren't typos.
+            if len(q_norm) > len(key_norm):
+                ratio = len(key_norm) / len(q_norm)
+                if ratio < 0.85:
+                    continue
             score = difflib.SequenceMatcher(None, q_norm, key_norm).ratio()
             if score > best_score:
+                second_best = best_score
                 best_score = score
                 best_value = value
-        if best_score >= 0.8:
+            elif score > second_best:
+                second_best = score
+
+        # Require a clear winner — best must beat the threshold AND lead
+        # the runner-up by at least 0.05 (prevents near-ties).
+        if best_score >= threshold and (best_score - second_best) >= 0.05:
             return best_value
 
         return None
@@ -356,6 +391,63 @@ class Catalogue:
             )
 
         return resolved, issues
+
+    # ------------------------------------------------------------------
+    # Menu Summary (for browse_menu tool)
+    # ------------------------------------------------------------------
+
+    def get_menu_summary(self) -> dict:
+        """Full structured menu data for the browse_menu tool.
+
+        Returns categories with items (name, description, sizes, topping names),
+        deals, and delivery fee. Topping prices are NOT included — the LLM
+        discovers those via add_to_cart responses.
+        """
+        categories: list[dict] = []
+        for cat in self._menu_data.get("categories", []):
+            items: list[dict] = []
+            for item in cat.get("items", []):
+                if item.get("available") is False:
+                    continue
+                sizes = item.get("sizes")
+                unavailable = item.get("unavailable_variants", [])
+                if sizes and unavailable:
+                    sizes = {k: v for k, v in sizes.items() if k not in unavailable}
+                    if not sizes:
+                        continue
+                entry: dict = {
+                    "name": item["name"],
+                    "description": item.get("description", ""),
+                }
+                if sizes:
+                    entry["sizes"] = sizes
+                else:
+                    entry["price"] = item.get("price", 0.0)
+                topping_ids = item.get("available_toppings", [])
+                if topping_ids:
+                    entry["available_toppings"] = [
+                        self._toppings_by_id[tid].name
+                        for tid in topping_ids
+                        if tid in self._toppings_by_id
+                    ]
+                items.append(entry)
+            if items:
+                categories.append({"name": cat["name"], "items": items})
+
+        deals: list[dict] = []
+        for deal in self._menu_data.get("deals", []):
+            deals.append({
+                "name": deal["name"],
+                "description": deal.get("description", ""),
+                "price": deal["price"],
+                "includes": deal.get("includes", {}),
+            })
+
+        return {
+            "categories": categories,
+            "deals": deals,
+            "delivery_fee": self._menu_data.get("delivery_fee", 0.0),
+        }
 
     # ------------------------------------------------------------------
     # Prompt Hints

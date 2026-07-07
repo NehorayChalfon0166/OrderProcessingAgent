@@ -210,6 +210,10 @@ class UpdateItemResult(BaseModel):
         default_factory=list,
         description="Ambiguous matches — multiple items matched the reference",
     )
+    issues: list[str] = Field(
+        default_factory=list,
+        description="Non-blocking warnings (e.g. invalid size, used default)",
+    )
 
 
 class ViewCartResult(BaseModel):
@@ -249,6 +253,31 @@ class ConfirmOrderResult(BaseModel):
         default=None, description="The confirmed order ID"
     )
     total: float = Field(default=0.0, ge=0, description="Final order total")
+    issues: list[str] = Field(
+        default_factory=list,
+        description="Preconditions not met (e.g. minimum order amount)",
+    )
+
+
+class BrowseMenuResult(BaseModel):
+    """Result from the browse_menu tool — full restaurant menu for discovery.
+
+    Returns item names, descriptions, sizes with prices, and topping names.
+    Topping prices are NOT included — the LLM discovers those via add_to_cart.
+    """
+
+    restaurant_name: str = Field(description="Name of the restaurant")
+    categories: list[dict] = Field(
+        default_factory=list,
+        description="Categories with items: name, description, sizes {name: price}, available_toppings [name]",
+    )
+    deals: list[dict] = Field(
+        default_factory=list,
+        description="Combo deals: name, description, price, includes dict",
+    )
+    delivery_fee: float = Field(
+        default=0.0, ge=0, description="Delivery fee"
+    )
 
 
 class CancelOrderResult(BaseModel):

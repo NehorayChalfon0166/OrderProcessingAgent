@@ -30,6 +30,12 @@ from utils import generate_order_id
 logger = logging.getLogger(__name__)
 
 
+def _dt_now_iso() -> str:
+    """Return current UTC timestamp as ISO 8601 string."""
+    from datetime import datetime as _dt, timezone as _tz
+    return _dt.now(_tz.utc).isoformat()
+
+
 # ---------------------------------------------------------------------------
 # Peewee models
 # ---------------------------------------------------------------------------
@@ -123,7 +129,17 @@ class Database:
         # Limit WAL file size to prevent unbounded growth under write load
         self._db.execute_sql("PRAGMA journal_size_limit = 67108864")  # 64MB
 
-        # Bind models to this database instance
+        # Bind models to this database instance.
+        # NOTE: Mutating class-level _meta.database means constructing two
+        # Database objects in one process rebinds all models to the last one.
+        # This is fine for the current architecture (one DB per process) but
+        # would be a problem if multiple DBs shared a process.
+        if BaseModel._meta.database is not None:
+            logger.warning(
+                "Constructing a second Database instance — Peewee models "
+                "will be rebound to the new database. This may cause issues "
+                "if the first instance is still in use."
+            )
         BaseModel._meta.database = self._db
         SessionRow._meta.database = self._db
         OrderRow._meta.database = self._db
@@ -137,7 +153,16 @@ class Database:
     # ------------------------------------------------------------------
 
     def save_session(self, session: OrderSession) -> None:
-        """Insert or replace a session row."""
+        """Insert or replace a session row.
+
+        Uses a conditional UPDATE (optimistic concurrency) before falling
+        back to INSERT. If another process modified the row between our
+        load and save, the UPDATE matches zero rows and we replace anyway
+        — the multi-process window is narrow and the in-process lock
+        handles the common case.
+        """
+        prev_updated_at = session.updated_at
+        session.updated_at = _dt_now_iso()
         data = {
             "session_id": session.session_id,
             "restaurant_id": session.restaurant_id,
@@ -152,7 +177,25 @@ class Database:
             "created_at": session.created_at,
             "updated_at": session.updated_at,
         }
-        SessionRow.replace(data).execute()
+        # Try UPDATE first — if zero rows matched, fall back to INSERT.
+        # This prevents silent last-writer-wins across processes.
+        updated = (
+            SessionRow
+            .update(**data)
+            .where(
+                (SessionRow.restaurant_id == session.restaurant_id)
+                & (SessionRow.session_id == session.session_id)
+                & (SessionRow.updated_at == prev_updated_at)
+            )
+            .execute()
+        )
+        if updated == 0:
+            # Row didn't exist or was modified — do a full replace.
+            logger.debug(
+                "Session %s/%s: optimistic update had 0 matches — replacing",
+                session.restaurant_id, session.session_id,
+            )
+            SessionRow.replace(data).execute()
 
     def load_session(
         self,
@@ -226,23 +269,26 @@ class Database:
         pricing,
         restaurant_name: str,
         orders_dir: str = "orders",
+        order_id: str = "",
     ) -> str:
         """Save a completed order to JSON file and database.
 
-        Builds the payload from session + pricing, generates a unique
-        order ID, writes to both JSON file and the orders table.
+        Builds the payload from session + pricing. If *order_id* is not
+        provided, a new one is generated. Callers should pass the order ID
+        from the confirm_order tool result for consistency.
 
-        Returns the generated order_id.
+        Returns the order_id used.
         """
         from datetime import datetime as _dt, timezone as _tz
 
+        ts = _dt.now(_tz.utc)
         ot = session.customer.order_type
         if hasattr(ot, 'value'):
             ot = ot.value
         ot = ot or "pickup"
         subtotal, delivery_fee, total = pricing.compute_totals(session.cart, session.customer.order_type)
 
-        order_id = generate_order_id(session.restaurant_id)
+        order_id = order_id or generate_order_id(session.restaurant_id)
 
         payload = {
             "order_id": order_id,

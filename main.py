@@ -126,11 +126,15 @@ def save_order(
 ) -> str:
     """Build and save the final order. Delegates to Database.persist_completed_order."""
     if session._db is not None:
-        return session._db.persist_completed_order(session, pricing, restaurant_name, orders_dir)
+        return session._db.persist_completed_order(
+            session, pricing, restaurant_name, orders_dir,
+            order_id=session._confirmed_order_id or "",
+        )
     # Fallback for sessions without a DB handle (shouldn't happen in normal flow)
     ot = session.customer.order_type or OrderType.PICKUP
     subtotal, delivery_fee, total = pricing.compute_totals(session.cart, ot)
-    order_id = generate_order_id(session.restaurant_id)
+    order_id = session._confirmed_order_id or generate_order_id(session.restaurant_id)
+    ts = datetime.now(timezone.utc)
     payload = {
         "order_id": order_id, "session_id": session.session_id,
         "restaurant_id": session.restaurant_id, "restaurant": restaurant_name,
@@ -252,7 +256,7 @@ def run_session(config: AppConfig, restaurant_id: str | None = None) -> None:
                 _, _, total = pricing.compute_totals(session.cart, order_type)
                 print_system(f"Order saved to: {filepath}")
                 print(f"\n{'═' * 50}")
-                print(f"  🎉  Order #{session.session_id} confirmed!")
+                print(f"  🎉  Order #{session._confirmed_order_id or session.session_id} confirmed!")
                 print(f"  📄  Total: ${total:.2f}")
                 print(f"  📍  Type: {order_type.value if order_type else 'pickup'}")
                 print(f"{'═' * 50}\n")
@@ -446,10 +450,11 @@ def _run_dashboard(args, config: AppConfig) -> None:
 
     if not config.api_token:
         print(
-            "⚠️  API_TOKEN is not set — dashboard will be accessible without "
-            "authentication.\n"
-            "   Set API_TOKEN in .env to enable token-based auth."
+            "❌ API_TOKEN is required for the dashboard.\n"
+            "   Set API_TOKEN in .env to protect the dashboard. It exposes\n"
+            "   customer PII (names, phones, addresses) and write endpoints."
         )
+        sys.exit(1)
 
     init_dashboard(config)
 

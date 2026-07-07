@@ -211,7 +211,7 @@ class TestErrorRecovery:
         mock_llm = MockLLMClient([
             # Turn 1: LLM calls a non-existent tool, then recovers
             [
-                ("browse_menu", {}),  # does not exist
+                ("search_menu", {}),  # does not exist
                 ("add_to_cart", {"product_name": "Margherita"}),
             ],
             "Added Margherita despite the error.",

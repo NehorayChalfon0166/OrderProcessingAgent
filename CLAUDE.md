@@ -97,9 +97,10 @@ channel wraps this — CLI, WhatsApp, web, voice, etc.
 - **Printer agent endpoints live on the Twilio server (port 8080), not the
   dashboard (port 8081).** Point the printer agent config at the Twilio
   server URL — the `/api/orders` routes are there.
-- **No `browse_menu` tool exists.** The LLM has no way to programmatically
-  explore the menu — it discovers items only through `add_to_cart` failures.
-  This is an intentional design choice (the system prompt includes hints).
+- **A `browse_menu` tool now exists.** The LLM can explore categories, items,
+  sizes, prices, and available toppings. Use it when customers ask "what do
+  you have?" `add_to_cart` remains the authority for per-item pricing detail
+  (topping prices, resolved size).
 - **Online payment (Stripe) is dormant.** Stripe doesn't operate in Israel.
   Payment is cash-on-delivery only. `payment.py` is kept for future expansion.
   For Israeli online payment, see Grow: https://grow.business

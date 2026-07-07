@@ -11,7 +11,17 @@ the bytes to send — how they reach the printer is the agent's concern.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
+
+# Control characters that could cause printer misbehavior (everything
+# below 0x20 except newline 0x0A).
+_PRINTER_SAFE = re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f]")
+
+
+def _sanitize(text: str) -> str:
+    """Strip control characters that could cause printer misbehavior."""
+    return _PRINTER_SAFE.sub("", text)
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +143,11 @@ def _format_ticket(order: dict, restaurant_name: str) -> str:
     address = customer.get("address", "")
 
     if name:
-        lines.append(f"Customer: {name}")
+        lines.append(f"Customer: {_sanitize(name)}")
     if phone:
         lines.append(f"Phone:    {phone}")
     if address:
-        lines.append(f"Address:  {address}")
+        lines.append(f"Address:  {_sanitize(address)}")
     if name or phone:
         lines.append("")
 
@@ -146,7 +156,7 @@ def _format_ticket(order: dict, restaurant_name: str) -> str:
     items = order.get("items", [])
     for item in items:
         qty = item.get("quantity", 1)
-        item_name = item.get("name", "?")
+        item_name = _sanitize(item.get("name", "?"))
         size = item.get("size")
         toppings = item.get("toppings", [])
         instructions = item.get("special_instructions")
@@ -158,11 +168,11 @@ def _format_ticket(order: dict, restaurant_name: str) -> str:
 
         if toppings:
             for top in toppings:
-                top_name = top.get("name", str(top))
+                top_name = _sanitize(top.get("name", str(top)))
                 lines.append(f"     + {top_name}"[:LINE_WIDTH])
 
         if instructions:
-            lines.append(f"     [{instructions}]"[:LINE_WIDTH])
+            lines.append(f"     [{_sanitize(instructions)}]"[:LINE_WIDTH])
 
     lines.append(SEPARATOR)
     lines.append("")
@@ -182,7 +192,7 @@ def _format_ticket(order: dict, restaurant_name: str) -> str:
     order_notes = order.get("special_instructions")
     if order_notes:
         lines.append(SEPARATOR)
-        lines.append(f'    "{order_notes}"')
+        lines.append(f'    "{_sanitize(order_notes)}"')
         lines.append("")
 
     # Footer

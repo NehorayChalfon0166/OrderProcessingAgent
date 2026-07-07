@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 import time as _time_module
 import uuid
 from collections.abc import AsyncIterator
@@ -51,6 +52,7 @@ _twilio: TwilioClient | None = None
 _router: SessionRouter | None = None
 _orders_dir: str = "orders"
 _api_token: str = ""
+_dashboard_token: str = ""
 _cfg: AppConfig | None = None
 _locks: dict[str, asyncio.Lock] = {}
 _lock_access: dict[str, float] = {}
@@ -94,6 +96,9 @@ def _check_rate_limit(phone: str) -> bool:
         return True
     now = _time_module.monotonic()
     timestamps = [t for t in _rate_window.get(phone, []) if now - t < 60.0]
+    if not timestamps:
+        _rate_window.pop(phone, None)  # prevent unbounded growth
+        timestamps = []
     if len(timestamps) >= _cfg.rate_limit_max_per_minute:
         _rate_window[phone] = timestamps
         return False
@@ -179,10 +184,22 @@ def _build_hints(catalogue) -> str:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    global _registry, _db, _llm, _twilio, _router, _orders_dir, _api_token, _cfg
+    global _registry, _db, _llm, _twilio, _router, _orders_dir, _api_token, _dashboard_token, _cfg
 
     cfg = AppConfig.from_env()
     _cfg = cfg
+
+    # Validate Twilio credentials — required for webhook security.
+    # An empty auth token means webhook signatures aren't verified.
+    if not cfg.twilio_account_sid or not cfg.twilio_auth_token:
+        logger.critical(
+            "TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are required. "
+            "Without them, webhook signatures cannot be verified and "
+            "anyone can forge orders."
+        )
+        import sys
+        sys.exit(1)
+
     _registry = RestaurantRegistry(cfg.restaurants_path)
     _db = Database(cfg.db_path)
     _llm = LLMClient(cfg)
@@ -194,6 +211,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _router = SessionRouter()
     _orders_dir = cfg.orders_dir
     _api_token = cfg.api_token
+    _dashboard_token = cfg.dashboard_token
 
     if not cfg.stripe_secret_key or not cfg.stripe_webhook_secret:
         logger.warning(
@@ -228,6 +246,7 @@ def _save_order_file(session, restaurant_ctx: RestaurantContext) -> str:
         return _db.persist_completed_order(
             session, restaurant_ctx.pricing,
             restaurant_ctx.config.name, _orders_dir,
+            order_id=session._confirmed_order_id or "",
         )
     logger.error("Database not initialised — cannot save order")
     return ""
@@ -246,7 +265,7 @@ def _notify_restaurant(session, restaurant_ctx: RestaurantContext, order_id: str
     phone = session.customer.phone or "N/A"
     address = session.customer.address or ""
 
-    order_ref = order_id or session.session_id
+    order_ref = order_id or session._confirmed_order_id or session.session_id
     message = (
         f"🔔 New Order!\nOrder #{order_ref}\n"
         f"Customer: {name} ({phone})\nType: {ot}"
@@ -258,7 +277,7 @@ def _notify_restaurant(session, restaurant_ctx: RestaurantContext, order_id: str
     _, _, total = pricing.compute_totals(
         session.cart, session.customer.order_type or OrderType.PICKUP,
     )
-    message += f"\n{'─' * 20}\n{items_text}\n{'─' * 20}\nTotal: ₪{total:.2f}"
+    message += f"\n{'─' * 20}\n{items_text}\n{'─' * 20}\nTotal: ${total:.2f}"
 
     try:
         _twilio.send_whatsapp_message(restaurant_phone, message)
@@ -291,7 +310,8 @@ async def health() -> dict:
             _db._db.execute_sql("SELECT 1")
             checks["database"] = "ok"
         except Exception as e:
-            checks["database"] = f"error: {e}"
+            checks["database"] = "error"
+            logger.error("Health check: database error: %s", e)
             healthy = False
     else:
         checks["database"] = "not_initialised"
@@ -312,9 +332,21 @@ async def health() -> dict:
 
 @app.get("/metrics")
 async def metrics(request: Request):
-    """Expose internal metrics as JSON."""
+    """Expose internal metrics as JSON.
+
+    Accepts API_TOKEN (admin) or DASHBOARD_TOKEN (read-only dashboard).
+    """
     token = request.query_params.get("token", "")
-    if not _api_token or token != _api_token:
+    # Also check Authorization header
+    if not token:
+        token = (request.headers.get("Authorization", "") or "").removeprefix("Bearer ")
+    # Validate against available tokens
+    valid = False
+    if _api_token and secrets.compare_digest(token, _api_token):
+        valid = True
+    elif _dashboard_token and secrets.compare_digest(token, _dashboard_token):
+        valid = True
+    if not valid:
         raise HTTPException(status_code=403, detail="Invalid token")
     async with _metrics_lock:
         return dict(_metrics)
@@ -382,10 +414,11 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
     if _twilio is None or _router is None or _registry is None or _llm is None:
         raise HTTPException(status_code=500, detail="Server not initialised")
 
-    # Process
-    session = _router.get_or_create(restaurant_ctx.config.id, wa_id, db=_db)
+    # Process — acquire lock BEFORE loading session to avoid lost updates
+    # from concurrent messages (same phone) or multiple server processes.
     lock_key = f"{restaurant_ctx.config.id}:{wa_id}"
     async with _get_lock(lock_key):
+        session = _router.get_or_create(restaurant_ctx.config.id, wa_id, db=_db)
         try:
             if _is_session_stale(session):
                 text = (
@@ -412,7 +445,14 @@ async def receive_whatsapp(request: Request) -> PlainTextResponse:
                     logger.warning("PAYMENT_PENDING but Stripe not configured — cannot create payment link")
                     response = "Sorry, online payment is not available. Pay cash on delivery."
                 else:
-                    base_url = f"{request.url.scheme}://{request.url.netloc}"
+                    # Use configured public URL; only fall back to request
+                    # host in debug mode (dev convenience).
+                    if _cfg and _cfg.public_base_url:
+                        base_url = _cfg.public_base_url
+                    elif _cfg and _cfg.debug:
+                        base_url = f"{request.url.scheme}://{request.url.netloc}"
+                    else:
+                        base_url = ""
                     payment_url = create_checkout_session(
                         session_id=session.session_id,
                         restaurant_id=restaurant_ctx.config.id,
@@ -569,10 +609,10 @@ async def voice_speech_result(request: Request) -> PlainTextResponse:
             media_type="application/xml",
         )
 
-    # Process
-    session = _router.get_or_create(restaurant_id, caller_id, db=_db)
+    # Process — acquire lock BEFORE loading session (see WhatsApp path above)
     lock_key = f"{restaurant_id}:{caller_id}"
     async with _get_lock(lock_key):
+        session = _router.get_or_create(restaurant_id, caller_id, db=_db)
         try:
             if _is_session_stale(session):
                 speech_result = (
@@ -679,15 +719,48 @@ async def receive_payment(request: Request):
 # ── Printer Agent API ─────────────────────────────────────────────────────
 
 
-def _check_printer_token(token: str) -> bool:
-    return bool(_api_token) and token == _api_token
+def _check_printer_token(token: str, restaurant_id: str = "") -> bool:
+    """Validate a printer token against global API_TOKEN or per-restaurant token.
+
+    When a per-restaurant printer_token is used, the restaurant_id must match.
+    """
+    if not token:
+        return False
+    # Global admin token grants access to everything
+    if _api_token and secrets.compare_digest(token, _api_token):
+        return True
+    # Per-restaurant printer token — must match the requested restaurant
+    if restaurant_id and _registry is not None:
+        try:
+            ctx = _registry.get_by_id(restaurant_id)
+        except Exception:
+            ctx = None
+        if (
+            ctx is not None
+            and isinstance(ctx.config.printer_token, str)
+            and ctx.config.printer_token
+        ):
+            return secrets.compare_digest(token, ctx.config.printer_token)
+    # Legacy: check all restaurants for matching printer tokens.
+    # Guard against mock registries in tests that return non-iterable objects.
+    if _registry is not None:
+        try:
+            restaurants = _registry.list_restaurants()
+            if not hasattr(restaurants, '__iter__'):
+                restaurants = []
+        except Exception:
+            restaurants = []
+        for r in restaurants:
+            if isinstance(r.printer_token, str) and r.printer_token and secrets.compare_digest(token, r.printer_token):
+                return True
+    return False
 
 
 @app.get("/api/orders")
 async def get_unprinted_orders(request: Request):
     restaurant_id = request.query_params.get("restaurant_id", "")
     token = request.query_params.get("token", "")
-    if not _check_printer_token(token):
+    if not _check_printer_token(token, restaurant_id=restaurant_id):
         raise HTTPException(status_code=403, detail="Invalid token")
     if _db is None:
         return {"orders": []}
@@ -697,7 +770,8 @@ async def get_unprinted_orders(request: Request):
 @app.post("/api/orders/{order_id}/printed")
 async def mark_order_printed(order_id: str, request: Request):
     token = request.query_params.get("token", "")
-    if not _check_printer_token(token):
+    restaurant_id = request.query_params.get("restaurant_id", "")
+    if not _check_printer_token(token, restaurant_id=restaurant_id):
         raise HTTPException(status_code=403, detail="Invalid token")
     if _db is not None:
         _db.mark_printed(order_id)

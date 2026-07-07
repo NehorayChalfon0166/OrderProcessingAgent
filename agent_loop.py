@@ -11,6 +11,7 @@ Uses a loop pattern:
 
 from __future__ import annotations
 
+import json
 import logging
 
 from catalogue import Catalogue
@@ -69,7 +70,16 @@ def process_turn(
         messages = messages_to_openai(session.conversation)
         full_msgs = [{"role": "system", "content": prompt}] + messages
 
-        text, tool_calls = llm_client.chat(full_msgs, tool_defs)
+        try:
+            text, tool_calls = llm_client.chat(full_msgs, tool_defs)
+        except Exception:
+            logger.exception(
+                "LLM chat failed for session %s", session.session_id,
+            )
+            fallback = "Sorry, something went wrong. Please try again."
+            session.add_assistant_message(content=fallback)
+            session.save()
+            return fallback
 
         if not tool_calls:
             # Model is responding to the customer — we're done
@@ -86,15 +96,20 @@ def process_turn(
         # Snapshot before modifying session — enables rollback if tool batch crashes
         session.save()
 
+        # Truncate to max 5 tool calls — DeepSeek/OpenAI require every
+        # tool_call id in an assistant message to have a matching tool result,
+        # so we must record only what we'll execute.
+        if len(tool_calls) > 5:
+            logger.warning(
+                "Truncating %d tool calls to 5 for session %s",
+                len(tool_calls), session.session_id,
+            )
+            tool_calls = tool_calls[:5]
+
         session.add_assistant_message(content=None, tool_calls=tool_calls)
 
         try:
-            if len(tool_calls) > 5:
-                logger.warning(
-                    "Truncating %d tool calls to 5 for session %s",
-                    len(tool_calls), session.session_id,
-                )
-            for tc in tool_calls[:5]:
+            for tc in tool_calls:
                 _execute_tool(session, catalogue, pricing, tc, tool_funcs)
 
             _apply_transition(session)
@@ -140,7 +155,7 @@ def _execute_tool(
             result = result_obj.model_dump_json()
         except Exception as e:
             logger.error("Tool %s failed: %s", tc.name, e, exc_info=True)
-            result = f'{{"success": false, "error": "{str(e)}"}}'
+            result = json.dumps({"success": False, "error": str(e)})
 
     session.add_tool_result(
         tool_call_id=tc.id,
@@ -257,6 +272,7 @@ def _restore_session_from_snapshot(session: OrderSession) -> None:
     session.customer = restored.customer
     session.conversation = restored.conversation
     session.state = restored.state
+    session.payment_method = restored.payment_method
     session._pending_transition = None
     session.updated_at = restored.updated_at
     logger.info("Session %s/%s rolled back to snapshot", session.restaurant_id, session.session_id)

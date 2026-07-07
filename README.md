@@ -80,7 +80,7 @@ Customer → WhatsApp → Twilio → server.py → agent_loop.py (process_turn)
 ├── dashboard_static/    # CSS + JS for dashboard
 ├── dashboard_templates/ # Jinja2 HTML templates
 ├── docs/                # Architecture + deployment documentation
-├── tests/               # 351 tests (pytest + E2E)
+├── tests/               # 395 tests (pytest + E2E)
 ├── orders/              # Completed order JSONs
 └── sessions/            # Legacy JSON sessions (migrated to SQLite)
 ```

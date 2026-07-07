@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 from catalogue import Catalogue
 from models import (
     AddToCartResult,
+    BrowseMenuResult,
     CancelOrderResult,
     CartItem,
     ConfirmOrderResult,
@@ -36,6 +37,7 @@ from models import (
 )
 from pricing import PricingEngine
 from session import OrderSession
+from utils import generate_order_id
 
 
 # =============================================================================
@@ -142,6 +144,13 @@ def add_to_cart(
     options = options or {}
     issues: list[str] = []
 
+    # Coerce numeric args — LLMs may emit them as strings
+    try:
+        quantity = int(quantity)
+    except (TypeError, ValueError):
+        quantity = 1
+    quantity = min(max(1, quantity), 100)  # cap at 100
+
     # 1. Try product (includes deals — they're registered as products)
     product = catalogue.find_product(product_name)
     if product is None:
@@ -219,16 +228,26 @@ def update_item(
 
     item = matches[0]
     product = catalogue.get_product(item.product_id)
+    issues: list[str] = []
+
+    # Coerce numeric args — LLMs may emit them as strings
+    if quantity is not None:
+        try:
+            quantity = int(quantity)
+        except (TypeError, ValueError):
+            quantity = 1
 
     # Apply changes
     if quantity is not None:
         item.quantity = max(1, quantity)
     if size is not None and product is not None:
-        resolved, _ = catalogue.resolve_size(product, size)
+        resolved, size_issues = catalogue.resolve_size(product, size)
         item.size = resolved
+        issues.extend(size_issues)
     if toppings is not None and product is not None:
-        resolved, _ = catalogue.resolve_toppings(product, toppings)
+        resolved, topping_issues = catalogue.resolve_toppings(product, toppings)
         item.toppings = resolved
+        issues.extend(topping_issues)
     if options is not None:
         item.options = {**item.options, **options}
     if special_instructions is not None:
@@ -240,7 +259,7 @@ def update_item(
     idx = session.cart.index(item)
     session.cart[idx] = updated
 
-    return UpdateItemResult(success=True, item=updated)
+    return UpdateItemResult(success=True, item=updated, issues=issues)
 
 
 @tool(description="Show the current cart contents and prices")
@@ -325,6 +344,14 @@ def request_review(
     ):
         issues.append("Delivery address is required for delivery orders.")
 
+    # Check minimum order amount
+    subtotal, _, _ = pricing.compute_totals(session.cart, session.customer.order_type or OrderType.PICKUP)
+    if not pricing.check_minimum_order(subtotal):
+        issues.append(
+            f"Order minimum is ${pricing.min_order_amount:.2f}. "
+            f"Your current subtotal is ${subtotal:.2f}."
+        )
+
     if issues:
         return RequestReviewResult(success=False, issues=issues)
 
@@ -340,10 +367,23 @@ def confirm_order(
     payment_method: str = "cash",
 ) -> ConfirmOrderResult:
     order_type = session.customer.order_type or OrderType.PICKUP
-    _, _, total = pricing.compute_totals(session.cart, order_type)
-    order_id = str(uuid.uuid4())[:8].upper()
+    subtotal, _, total = pricing.compute_totals(session.cart, order_type)
+
+    if not pricing.check_minimum_order(subtotal):
+        return ConfirmOrderResult(
+            success=False,
+            order_id=None,
+            total=total,
+            issues=[
+                f"Order minimum is ${pricing.min_order_amount:.2f}. "
+                f"Your current subtotal is ${subtotal:.2f}."
+            ],
+        )
+
+    order_id = generate_order_id(session.restaurant_id)
 
     session.payment_method = payment_method
+    session._confirmed_order_id = order_id
 
     if payment_method == "link":
         session._pending_transition = OrderState.PAYMENT_PENDING
@@ -351,6 +391,21 @@ def confirm_order(
         session._pending_transition = OrderState.COMPLETED
 
     return ConfirmOrderResult(success=True, order_id=order_id, total=total)
+
+
+@tool(description="Browse the full restaurant menu — see categories, items, sizes, prices, and available toppings")
+def browse_menu(
+    session: OrderSession,
+    catalogue: Catalogue,
+    pricing: PricingEngine,
+) -> BrowseMenuResult:
+    summary = catalogue.get_menu_summary()
+    return BrowseMenuResult(
+        restaurant_name=catalogue.restaurant_name,
+        categories=summary["categories"],
+        deals=summary["deals"],
+        delivery_fee=summary["delivery_fee"],
+    )
 
 
 @tool(description="Cancel the entire order")
@@ -369,6 +424,7 @@ def cancel_order(
 
 TOOLS_BY_STATE: dict[OrderState, list] = {
     OrderState.BUILDING: [
+        browse_menu,
         add_to_cart,
         remove_from_cart,
         update_item,
@@ -378,6 +434,7 @@ TOOLS_BY_STATE: dict[OrderState, list] = {
         cancel_order,
     ],
     OrderState.REVIEW: [
+        browse_menu,
         add_to_cart,
         remove_from_cart,
         update_item,

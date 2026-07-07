@@ -1,4 +1,4 @@
-"""Dashboard server — read-only admin interface for order management.
+"""Dashboard server — admin interface for order management.
 
 Separate FastAPI process (port 8081 by default). Reads the same SQLite
 database as the Twilio server via WAL mode. Token-protected with the
@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -29,10 +30,21 @@ logger = logging.getLogger(__name__)
 _db: Database | None = None
 _registry: RestaurantRegistry | None = None
 _api_token: str = ""
+_dashboard_token: str = ""
 _restaurants_path: str = "restaurants.json"
 _templates: Jinja2Templates | None = None
 
 app = FastAPI(title="Order Processing Agent — Dashboard")
+
+
+@app.middleware("http")
+async def _add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 
 _dashboard_dir = Path(__file__).resolve().parent
 _static_dir = _dashboard_dir / "dashboard_static"
@@ -41,14 +53,13 @@ if _static_dir.exists():
 
 
 def init_dashboard(config: AppConfig) -> None:
-    global _db, _registry, _api_token, _templates, _restaurants_path
+    global _db, _registry, _api_token, _dashboard_token, _templates, _restaurants_path
     _db = Database(config.db_path)
     _registry = RestaurantRegistry(config.restaurants_path)
     _api_token = config.api_token
+    _dashboard_token = config.dashboard_token
     _restaurants_path = config.restaurants_path
     _templates = Jinja2Templates(directory=str(_dashboard_dir / "dashboard_templates"))
-    if not _api_token:
-        logger.warning("API_TOKEN not set — dashboard open without auth")
 
 
 def _require_init() -> tuple[Database, RestaurantRegistry]:
@@ -61,24 +72,49 @@ def _require_init() -> tuple[Database, RestaurantRegistry]:
     return _db, _registry
 
 
-def _check_token(request: Request) -> None:
-    # If no token configured, allow (dev mode without auth)
-    if not _api_token:
-        return
-    # If token configured but dashboard not initialised, block
+def _token_valid(token: str | None, require_admin: bool = False) -> bool:
+    """Check whether *token* is a valid credential.
+
+    Args:
+        token: The token to validate.
+        require_admin: If True, only API_TOKEN (admin) is accepted.
+            DASHBOARD_TOKEN (read-only) is rejected for write endpoints.
+    """
+    if not token:
+        return False
+    if _api_token and secrets.compare_digest(token, _api_token):
+        return True
+    if not require_admin and _dashboard_token and secrets.compare_digest(token, _dashboard_token):
+        return True
+    return False
+
+
+def _extract_token(request: Request) -> str | None:
+    """Extract auth token from cookie, query param, or Authorization header."""
+    token = request.cookies.get("dashboard_token")
+    if token:
+        return token
+    token = request.query_params.get("token")
+    if token:
+        return token
+    token = (request.headers.get("Authorization", "") or "").removeprefix("Bearer ")
+    if token:
+        return token
+    return None
+
+
+def _check_token(request: Request, require_admin: bool = False) -> None:
+    # Fail closed — require a token. Unauthenticated dashboards leak PII
+    # (customer names/phones/addresses) and expose write endpoints.
+    if not _api_token and not _dashboard_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Dashboard not configured — set API_TOKEN or DASHBOARD_TOKEN in .env",
+        )
     if _db is None:
         raise HTTPException(status_code=503, detail="Dashboard not initialised")
-    # Check cookie first (set on first query-param access)
-    token = request.cookies.get("dashboard_token")
-    if token and token == _api_token:
-        return
-    # Fall back to query param (initial access, bookmarked URL)
-    token = request.query_params.get("token")
-    if token and token == _api_token:
-        return
-    # Fall back to Authorization header (API-style access)
-    token = (request.headers.get("Authorization", "") or "").removeprefix("Bearer ")
-    if token and token == _api_token:
+    token = _extract_token(request)
+    if token and _token_valid(token, require_admin=require_admin):
         return
     raise HTTPException(status_code=403, detail="Invalid or missing token")
 
@@ -95,12 +131,13 @@ def _render(request: Request, name: str, **ctx) -> HTMLResponse:
     })
     # On first access via query param, set a cookie so subsequent
     # navigation doesn't leak the token in URLs.
-    if raw_token and raw_token == _api_token:
+    if raw_token and (_token_valid(raw_token) or secrets.compare_digest(raw_token, _api_token)):
         response.set_cookie(
             key="dashboard_token",
             value=raw_token,
             httponly=True,
             samesite="lax",
+            secure=True,   # only sent over HTTPS
             max_age=86400,  # 24 hours
         )
     return response
@@ -277,7 +314,7 @@ async def view_menu(request: Request, restaurant_id: str):
 
 @app.post("/menu/{restaurant_id}/edit")
 async def edit_menu(request: Request, restaurant_id: str):
-    _check_token(request)
+    _check_token(request, require_admin=True)
     _db, registry = _require_init()
     ctx = registry.get_by_id(restaurant_id)
     if ctx is None:
@@ -332,7 +369,7 @@ async def list_restaurants(request: Request):
 
 @app.post("/restaurants/add")
 async def add_restaurant(request: Request):
-    _check_token(request)
+    _check_token(request, require_admin=True)
     _db, registry = _require_init()
     from restaurant import save_restaurant
     form = await request.form()

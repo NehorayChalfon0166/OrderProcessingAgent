@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,7 @@ class RestaurantConfig:
     twilio_phone: str
     owner_phone: str
     voice_phone: str = ""
+    printer_token: str = ""
 
 
 @dataclass
@@ -238,6 +240,7 @@ class RestaurantRegistry:
             )
 
         voice_phone = data.get("voice_phone", "")
+        printer_token = data.get("printer_token", "")
 
         return RestaurantConfig(
             id=rid,
@@ -246,6 +249,7 @@ class RestaurantRegistry:
             twilio_phone=twilio_phone,
             owner_phone=owner_phone,
             voice_phone=voice_phone,
+            printer_token=printer_token,
         )
 
 
@@ -262,6 +266,9 @@ _BLANK_MENU = {
     "delivery_fee": 0.0,
     "min_order_amount": 0.0,
 }
+
+
+_RESTAURANT_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 
 
 def save_restaurant(
@@ -284,8 +291,14 @@ def save_restaurant(
 
     Raises:
         FileNotFoundError: If restaurants.json doesn't exist.
-        ValueError: If required fields are missing.
+        ValueError: If required fields are missing or invalid.
     """
+    if not _RESTAURANT_ID_RE.match(restaurant_id):
+        raise ValueError(
+            f"Invalid restaurant ID '{restaurant_id}'. "
+            f"Must be 1-64 chars: lowercase letters, digits, underscores."
+        )
+
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(f"Restaurant config not found: {config_path.resolve()}")

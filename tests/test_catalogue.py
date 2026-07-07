@@ -29,9 +29,10 @@ class TestProductLookup:
         assert "pepperoni" in p.id.lower()
 
     def test_partial_match(self, catalogue):
-        p = catalogue.find_product("garlic")
+        # "margherita" is a substring of exactly one product — unambiguous
+        p = catalogue.find_product("margherita")
         assert p is not None
-        assert "garlic" in p.name.lower()
+        assert "margherita" in p.name.lower()
 
     def test_not_found(self, catalogue):
         p = catalogue.find_product("sushi")
